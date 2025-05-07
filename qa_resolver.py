@@ -52,6 +52,132 @@ def get_categories_to_process(categories_arg):
     
     return valid_categories
 
+def count_errors(mqxliff_dom, category):
+    """Count errors in a specific category"""
+    try:
+        # Import the module for this category
+        module_name = ERROR_CATEGORIES[category]['module']
+        module = importlib.import_module(module_name)
+        
+        # Use the find_errors function
+        if category == 'terminology':
+            errors = module.find_terminology_errors(mqxliff_dom)
+            return len(errors)
+        elif category == 'consistency':
+            errors = module.find_consistency_errors(mqxliff_dom)
+            return len(errors)
+        else:
+            return 0
+    except Exception as e:
+        logging.error(f"Error counting {category} errors: {str(e)}")
+        return 0
+
+def process_category_with_updates(category, mqxliff_dom, args, progress_callback=None):
+    """Process a single error category with progress updates"""
+    try:
+        # Import the module for this category
+        module_name = ERROR_CATEGORIES[category]['module']
+        module = importlib.import_module(module_name)
+        
+        # Get the errors first
+        if category == 'terminology':
+            errors = module.find_terminology_errors(mqxliff_dom, args.debug)
+        elif category == 'consistency':
+            errors = module.find_consistency_errors(mqxliff_dom, args.debug)
+        else:
+            errors = []
+            
+        total_errors = len(errors)
+        logging.info(f"Found {total_errors} {category} errors")
+        result = {'fixed': 0, 'ignored': 0, 'total': total_errors}
+        
+        # Process each error
+        for i, (unit, warning, error_info) in enumerate(errors):
+            # Extract context
+            unit_id = unit.getAttribute('id')
+            source_text, target_text = module.extract_source_target(unit)
+            
+            # Update progress if callback provided
+            if progress_callback:
+                if category == 'terminology':
+                    term_info = error_info if error_info else module.extract_term_info(warning)
+                    progress_callback(
+                        unit_id, 
+                        category, 
+                        i+1, 
+                        total_errors,
+                        term_info.get('source_term', ''),
+                        ", ".join(term_info.get('target_suggestions', []))
+                    )
+                else:
+                    progress_callback(
+                        unit_id,
+                        category,
+                        i+1,
+                        total_errors,
+                        error_info.get('consistent_text', ''),
+                        error_info.get('inconsistent_text', '')
+                    )
+            
+            # Process the error (this would need to be customized for each resolver)
+            # This simplified stub just counts interactions
+            if args.auto:
+                # In auto mode
+                if category == 'terminology':
+                    term_info = error_info if error_info else module.extract_term_info(warning)
+                    result_analysis = module.ai_handler.evaluate_terminology(
+                        source_text, 
+                        target_text, 
+                        term_info.get('source_term', ''), 
+                        term_info.get('target_suggestions', []),
+                        model=args.model
+                    )
+                    
+                    if result_analysis.get('needs_fix', False):
+                        if module.update_target_text(unit, result_analysis.get('new_text', '')):
+                            result['fixed'] += 1
+                        else:
+                            logging.error(f"Failed to update text in unit {unit_id}")
+                    else:
+                        if module.mark_as_ignored(warning):
+                            result['ignored'] += 1
+                else:
+                    # Consistency handling
+                    result_analysis = module.ai_handler.analyze_consistency(
+                        source_text,
+                        target_text,
+                        error_info.get('consistent_text', ''),
+                        error_info.get('inconsistent_text', ''),
+                        error_info.get('related_segments', []),
+                        model=args.model
+                    )
+                    
+                    if result_analysis.get('needs_fix', False):
+                        if module.update_target_text(unit, result_analysis.get('new_text', '')):
+                            result['fixed'] += 1
+                        else:
+                            logging.error(f"Failed to update text in unit {unit_id}")
+                    else:
+                        if module.mark_as_ignored(warning):
+                            result['ignored'] += 1
+            else:
+                # Call the standard process function for interactive mode
+                module_result = module.process(
+                    mqxliff_dom=mqxliff_dom,
+                    auto_mode=args.auto,
+                    model=args.model,
+                    debug=args.debug
+                )
+                return module_result
+        
+        logging.info(f"Completed {category} processing: {result['fixed']} fixed, {result['ignored']} ignored")
+        return result
+    except Exception as e:
+        logging.error(f"Error processing {category}: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return {'fixed': 0, 'ignored': 0, 'errors': 1}
+
 def process_category(category, mqxliff_dom, args):
     """Process a single error category using its dedicated resolver"""
     try:
