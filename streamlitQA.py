@@ -4,6 +4,7 @@ import tempfile
 import sys
 import subprocess
 import logging
+from io import StringIO
 from pathlib import Path
 
 # Add the current directory to the path so we can import our modules
