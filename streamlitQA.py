@@ -4,6 +4,7 @@ import tempfile
 import sys
 import subprocess
 import logging
+import time
 from io import StringIO
 from pathlib import Path
 
@@ -59,15 +60,61 @@ if uploaded_file is not None:
     
     # Process button
     if st.button("Process File"):
-        # Set up progress tracking elements
+        # Create a container for progress elements
         progress_container = st.container()
+        
+        # Keep track of processing info in session state
+        if "processing_info" not in st.session_state:
+            st.session_state.processing_info = {
+                "status": "Not started",
+                "current_unit": "",
+                "current_error": "",
+                "error_details": "",
+                "progress": 0,
+                "total_errors": 0,
+                "processed_count": 0
+            }
+            
+        # Create progress tracking elements
         with progress_container:
+            # Visual progress bar
             progress_bar = st.progress(0)
+            
+            # Progress metrics
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                status_metric = st.empty()
+            with col2:
+                progress_metric = st.empty()
+            with col3:
+                time_metric = st.empty()
+                
+            # Status text for detailed information
             status_text = st.empty()
             current_unit_text = st.empty()
             current_error_text = st.empty()
-            error_details_text = st.empty()
+            
+            # Error details with colorful display
+            error_details = st.container()
+            with error_details:
+                source_term_col, target_suggestions_col = st.columns(2)
+                with source_term_col:
+                    source_term_text = st.empty()
+                with target_suggestions_col:
+                    target_suggestions_text = st.empty()
         
+        log_container = st.expander("Processing Logs", expanded=False)
+        log_output = log_container.empty()
+
+        start_time = time.time()
+        
+        # Initialize processing info
+        st.session_state.processing_info["status"] = "Starting"
+        st.session_state.processing_info["progress"] = 0
+        status_metric.metric("Status", "Starting")
+        progress_metric.metric("Progress", "0%")
+        time_metric.metric("Time", "0s")
+            
         with st.spinner("Processing your file..."):
             try:
                 # Set up logging to capture output
@@ -78,7 +125,11 @@ if uploaded_file is not None:
                 logger.addHandler(handler)
                 
                 # Parse MQXLIFF file
-                status_text.text("Parsing MQXLIFF file...")
+                st.session_state.processing_info["status"] = "Parsing MQXLIFF"
+                status_text.info("Parsing MQXLIFF file...")
+                status_metric.metric("Status", "Parsing")
+                time_metric.metric("Time", f"{int(time.time() - start_time)}s")
+                
                 mqxliff_dom = file_handler.parse_file(tmp_path)
                 if not mqxliff_dom:
                     st.error("Failed to parse the MQXLIFF file.")
@@ -96,33 +147,40 @@ if uploaded_file is not None:
                     args.debug = debug_mode
                     
                     # Count total errors first
-                    status_text.text("Counting errors...")
+                    st.session_state.processing_info["status"] = "Counting errors"
+                    status_text.info("Counting errors...")
+                    status_metric.metric("Status", "Counting")
+                    time_metric.metric("Time", f"{int(time.time() - start_time)}s")
                     
                     for category in cat_list:
                         # Import the specific resolver
+                        module_name = ERROR_CATEGORIES[category]['module']
+                        module = importlib.import_module(module_name)
+                        
                         if category == 'terminology':
-                            module_name = ERROR_CATEGORIES[category]['module']
-                            module = importlib.import_module(module_name)
                             errors = module.find_terminology_errors(mqxliff_dom, debug_mode)
                             category_total = len(errors)
                         elif category == 'consistency':
-                            module_name = ERROR_CATEGORIES[category]['module']
-                            module = importlib.import_module(module_name)
                             errors = module.find_consistency_errors(mqxliff_dom, debug_mode)
                             category_total = len(errors)
                         else:
                             category_total = 0
                             
                         total_stats['total'] += category_total
-                        status_text.text(f"Found {category_total} {category} errors")
+                        status_text.info(f"Found {category_total} {category} errors")
+                    
+                    st.session_state.processing_info["total_errors"] = total_stats['total']
+                    progress_metric.metric("Progress", f"0/{total_stats['total']}")
                     
                     # Process each category with progress updates
                     if total_stats['total'] > 0:
                         processed_count = 0
-                        error_tracking = []
+                        st.session_state.processing_info["processed_count"] = 0
                         
                         for category in cat_list:
-                            status_text.text(f"Processing {category} errors...")
+                            st.session_state.processing_info["status"] = f"Processing {category}"
+                            status_text.info(f"Processing {category} errors...")
+                            status_metric.metric("Status", f"Processing {category}")
                             
                             # Import the specific resolver
                             module_name = ERROR_CATEGORIES[category]['module']
@@ -144,15 +202,31 @@ if uploaded_file is not None:
                                 source_text, target_text = module.extract_source_target(unit)
                                 
                                 # Update progress display
-                                current_unit_text.text(f"Processing unit: {unit_id}")
-                                current_error_text.text(f"Error {i+1}/{len(errors)} ({category})")
+                                st.session_state.processing_info["current_unit"] = unit_id
+                                st.session_state.processing_info["current_error"] = f"{i+1}/{len(errors)}"
                                 
+                                current_unit_text.info(f"Processing unit: {unit_id}")
+                                current_error_text.info(f"Error {i+1}/{len(errors)} ({category})")
+                                
+                                # Display error details with colors
                                 if category == 'terminology':
                                     term_info = error_info if error_info else module.extract_term_info(warning)
-                                    error_details_text.text(f"Term: {term_info.get('source_term', '')} → Suggestions: {', '.join(term_info.get('target_suggestions', []))}")
+                                    source_term = term_info.get('source_term', '')
+                                    target_suggestions = ', '.join(term_info.get('target_suggestions', []))
+                                    
+                                    st.session_state.processing_info["error_details"] = f"Term: {source_term} → {target_suggestions}"
+                                    
+                                    source_term_text.markdown(f"**Source Term:**\n<div style='background-color:#e6f3ff;padding:10px;border-radius:5px;'>{source_term}</div>", unsafe_allow_html=True)
+                                    target_suggestions_text.markdown(f"**Target Suggestions:**\n<div style='background-color:#e6ffe6;padding:10px;border-radius:5px;'>{target_suggestions}</div>", unsafe_allow_html=True)
                                 else:
                                     consistency_info = error_info
-                                    error_details_text.text(f"Consistent: {consistency_info.get('consistent_text', '')} → Inconsistent: {consistency_info.get('inconsistent_text', '')}")
+                                    consistent_text = consistency_info.get('consistent_text', '')
+                                    inconsistent_text = consistency_info.get('inconsistent_text', '')
+                                    
+                                    st.session_state.processing_info["error_details"] = f"Consistent: {consistent_text} → Inconsistent: {inconsistent_text}"
+                                    
+                                    source_term_text.markdown(f"**Consistent Text:**\n<div style='background-color:#e6f3ff;padding:10px;border-radius:5px;'>{consistent_text}</div>", unsafe_allow_html=True)
+                                    target_suggestions_text.markdown(f"**Inconsistent Text:**\n<div style='background-color:#ffe6e6;padding:10px;border-radius:5px;'>{inconsistent_text}</div>", unsafe_allow_html=True)
                                 
                                 # Process with the regular function
                                 if auto_mode:
@@ -199,13 +273,21 @@ if uploaded_file is not None:
                                     st.warning(f"Interactive mode is not supported in the web interface. Please use Auto mode.")
                                     break
                                 
-                                # Update progress bar
+                                # Update progress bar and metrics
                                 processed_count += 1
-                                progress_bar.progress(processed_count / total_stats['total'] if total_stats['total'] > 0 else 1.0)
+                                st.session_state.processing_info["processed_count"] = processed_count
+                                st.session_state.processing_info["progress"] = processed_count / total_stats['total']
+                                
+                                progress_percentage = int((processed_count / total_stats['total']) * 100)
+                                progress_bar.progress(processed_count / total_stats['total'])
+                                progress_metric.metric("Progress", f"{processed_count}/{total_stats['total']} ({progress_percentage}%)")
+                                time_metric.metric("Time", f"{int(time.time() - start_time)}s")
+                                
+                                # Update log display
+                                log_output.text_area("Log Output", log_stream.getvalue(), height=200)
                                 
                                 # Add brief delay to allow UI updates
-                                import time
-                                time.sleep(0.1)
+                                time.sleep(0.05)
                             
                             # Update total stats
                             total_stats['fixed'] += category_stats['fixed']
@@ -213,30 +295,44 @@ if uploaded_file is not None:
                             
                             # Save intermediate results
                             if category_stats['fixed'] > 0 or category_stats['ignored'] > 0:
-                                status_text.text(f"Saving changes after processing {category} errors...")
+                                st.session_state.processing_info["status"] = f"Saving {category} changes"
+                                status_text.info(f"Saving changes after processing {category} errors...")
+                                status_metric.metric("Status", f"Saving {category}")
                                 file_handler.save_file(mqxliff_dom, tmp_path)
                                 
-                            status_text.text(f"Completed {category}: {category_stats['fixed']} fixed, {category_stats['ignored']} ignored")
+                            status_text.success(f"Completed {category}: {category_stats['fixed']} fixed, {category_stats['ignored']} ignored")
                     
                     # Ignore remaining errors if requested
                     if ignore_remaining:
-                        status_text.text("Ignoring remaining errors...")
+                        st.session_state.processing_info["status"] = "Ignoring remaining"
+                        status_text.info("Ignoring remaining errors...")
+                        status_metric.metric("Status", "Ignoring remaining")
+                        
                         ignored_count = file_handler.ignore_remaining_errors(
                             mqxliff_dom, 
                             processed_categories=[ERROR_CATEGORIES[c]['codes'] for c in cat_list]
                         )
-                        status_text.text(f"Ignored {ignored_count} remaining errors")
+                        status_text.info(f"Ignored {ignored_count} remaining errors")
                         total_stats['ignored'] += ignored_count
                         
                         # Save final changes
                         file_handler.save_file(mqxliff_dom, tmp_path)
                     
                     # Show results
+                    st.session_state.processing_info["status"] = "Completed"
+                    st.session_state.processing_info["progress"] = 1.0
+                    
+                    elapsed_time = int(time.time() - start_time)
                     progress_bar.progress(1.0)
-                    status_text.text(f"Processing complete! Fixed {total_stats['fixed']} errors and ignored {total_stats['ignored']} errors.")
+                    status_metric.metric("Status", "Completed")
+                    progress_metric.metric("Progress", "100%")
+                    time_metric.metric("Time", f"{elapsed_time}s")
+                    
+                    status_text.success(f"Processing complete! Fixed {total_stats['fixed']} errors and ignored {total_stats['ignored']} errors in {elapsed_time} seconds.")
                     current_unit_text.empty()
                     current_error_text.empty()
-                    error_details_text.empty()
+                    source_term_text.empty()
+                    target_suggestions_text.empty()
                     
                     # Provide download link for processed file
                     with open(tmp_path, "rb") as file:
@@ -249,20 +345,21 @@ if uploaded_file is not None:
                         mime="application/octet-stream"
                     )
                     
-                    # Show logs
-                    st.text_area("Processing Logs", log_stream.getvalue(), height=300)
+                    # Show complete logs
+                    log_output.text_area("Complete Processing Logs", log_stream.getvalue(), height=300)
                         
             except Exception as e:
+                st.session_state.processing_info["status"] = "Error"
                 st.error(f"Error processing file: {str(e)}")
                 import traceback
                 st.text_area("Error Details", traceback.format_exc(), height=200)
                 
-                # Clear progress display on error
-                progress_bar.empty()
-                status_text.empty()
-                current_unit_text.empty()
-                current_error_text.empty()
-                error_details_text.empty()
+                # Update metrics on error
+                status_metric.metric("Status", "Error")
+                time_metric.metric("Time", f"{int(time.time() - start_time)}s")
+                
+                # Log the error
+                log_output.text_area("Error Logs", log_stream.getvalue(), height=300)
                 
             finally:
                 # Clean up temporary file
