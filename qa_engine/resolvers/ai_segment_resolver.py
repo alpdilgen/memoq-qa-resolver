@@ -44,7 +44,14 @@ For EACH flagged code decide a verdict:
 
 Return fixed_target = the corrected target with every marker preserved. If every code is a
 false_positive, return the current target unchanged. Give an HONEST integer confidence 0-100; use
-100 ONLY when you are certain the fix is correct and safe. Below the auto-apply threshold a human confirms."""
+100 ONLY when you are certain the fix is correct and safe. Below the auto-apply threshold a human confirms.
+
+CONFIDENCE CALIBRATION — be decisive on clear-cut MECHANICAL false positives. When the flagged
+character is part of an entity (e.g. the ';' in &quot;, the '&' in &amp;) or a URI scheme (e.g. the
+':' in mailto: / http: / https:), or the target is byte-identical to the source for the flagged
+pattern, the verdict is false_positive with confidence 100 — these are certain, and ignoring them
+only silences the flag without touching the translation. Reserve sub-100 confidence for cases that
+genuinely need human judgement (real wording/terminology/number/capitalisation decisions)."""
 
 
 def _build_user(member, issues):
