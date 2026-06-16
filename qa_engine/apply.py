@@ -115,7 +115,13 @@ def apply_resolved_items(content: bytes, items) -> bytes:
     # First pass: fixes win.
     for it in items:
         if it.resolution.action == "fix" and it.resolution.new_target is not None:
-            by_guid[it.segmentguid] = ("settarget", it.resolution.new_target)
+            new_target = it.resolution.new_target
+            # Safety net: internal tokenisation markers must never be written as
+            # literal text.  If they slipped through upstream, skip this segment
+            # entirely so the original target is preserved untouched.
+            if "⟦" in new_target or "⟧" in new_target:
+                continue
+            by_guid[it.segmentguid] = ("settarget", new_target)
     # Second pass: ignore only where there is no fix.
     for it in items:
         if it.resolution.action == "ignore" and it.segmentguid not in by_guid:

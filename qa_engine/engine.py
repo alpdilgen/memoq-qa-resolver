@@ -8,12 +8,23 @@ from .resolvers.inconsistency_resolver import resolve_inconsistencies
 from .resolvers.ai_segment_resolver import resolve_segment
 from .qa_codes import BULK_SUITABLE_CODES, describe_code
 from .apply import apply_resolved_items
+from .tags import detokenize
 
 # Register deterministic resolvers for their codes (one shared instance).
 _WS = WhitespaceResolver()
 for _code, _strat in STRATEGY_BY_CODE.items():
     if _strat == "deterministic":
         register_resolver(_code, _WS)
+
+
+def _disp(text, tags):
+    """Return the detokenized (human-readable) form of a tokenized segment text.
+    Falls back to the tokenized form only if detokenize raises, so the UI never
+    shows raw internal marker characters to the user."""
+    try:
+        return detokenize(text, tags)
+    except ValueError:
+        return text
 
 
 def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
@@ -50,14 +61,16 @@ def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
                                        + "; enable AI or fix manually.")
 
         primary = seg_issues[0]
+        src_disp = _disp(member.source_text, member.source_tags)
+        cur_disp = _disp(member.target_text, member.target_tags)
+        prop_disp = res.new_target if res.new_target is not None else cur_disp
         item = ResolvedItem(
             item_id=f"{guid}:{primary.code}",
             segmentguid=guid, tu_id=primary.tu_id,
             code=primary.code, problemname=primary.problemname,
-            source_preview=member.source_text,
-            current_target_preview=member.target_text,
-            proposed_target_preview=res.new_target if res.new_target is not None
-                                     else member.target_text,
+            source_preview=src_disp,
+            current_target_preview=cur_disp,
+            proposed_target_preview=prop_disp,
             resolution=res,
         )
         # deterministic no-op (whitespace already aligned) -> nothing to do; skip it
