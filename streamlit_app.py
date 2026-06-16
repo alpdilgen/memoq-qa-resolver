@@ -5,8 +5,8 @@ from qa_engine.aiclient import ClaudeAIClient
 
 st.set_page_config(page_title="memoQ QA Resolver", layout="wide")
 st.title("memoQ QA Resolver")
-st.caption("Upload a memoQ .mqxliff (with QA already run). The engine auto-fixes "
-           "what it can prove correct and asks you to approve the rest.")
+st.caption("The AI checks each flagged segment and either fixes it automatically "
+           "or proposes a fix for you to approve or edit.")
 
 # --- Sidebar: AI settings ---
 st.sidebar.header("Settings")
@@ -40,10 +40,9 @@ if rs is None:
 
 if rs is not None:
     view = session_to_view(rs)
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Auto-applied", len(view["auto_applied"]))
-    c2.metric("Needs approval", len(view["pending"]))
-    c3.metric("Report-only", len(view["report_only"]))
+    c1, c2 = st.columns(2)
+    c1.metric("Auto-fixed", len(view["auto_applied"]))
+    c2.metric("Needs your approval", len(view["pending"]))
 
     with st.expander(f"Auto-applied fixes ({len(view['auto_applied'])})"):
         st.dataframe([{"code": r["code"], "segment": r["tu_id"],
@@ -64,11 +63,6 @@ if rs is not None:
             if st.checkbox("Approve this fix", key=f"appr_{r['item_id']}"):
                 approved_ids.add(r["item_id"])
                 edits[r["item_id"]] = new
-
-    with st.expander(f"Report-only — manual review ({len(view['report_only'])})"):
-        st.dataframe([{"code": r["code"], "segment": r["tu_id"],
-                       "problem": r["problemname"], "note": r["rationale"]}
-                      for r in view["report_only"]], use_container_width=True)
 
     st.divider()
     if st.button("Apply & build corrected file", type="primary"):
