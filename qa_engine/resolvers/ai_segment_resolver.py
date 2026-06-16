@@ -22,7 +22,9 @@ SEGMENT_SCHEMA = {
             },
         },
         "fixed_target": {"type": "string"},
-        "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
+        # NB: structured-output schema does NOT support integer minimum/maximum
+        # (the API 400s). Keep it a bare integer and clamp to 0-100 in code.
+        "confidence": {"type": "integer"},
         "rationale": {"type": "string"},
     },
     "required": ["code_verdicts", "fixed_target", "confidence", "rationale"],
@@ -70,7 +72,7 @@ def resolve_segment(member, issues, context, ai_client, threshold=100) -> Resolu
 
     verdicts = {normalize_code(v.get("code", "")): v.get("verdict", "fix")
                 for v in data.get("code_verdicts", [])}
-    conf_int = int(data.get("confidence", 0))
+    conf_int = max(0, min(100, int(data.get("confidence", 0))))   # clamp to 0-100
     conf = conf_int / 100.0
     rationale = data.get("rationale", "")
     seg_codes = [normalize_code(i.code) for i in issues]

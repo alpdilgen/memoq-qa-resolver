@@ -222,19 +222,29 @@ def session_to_view(session) -> dict:
     }
 
 
-def items_for_apply(session, approved_ids, edits=None):
-    """Return the ResolvedItems to apply: all auto_applied + approved pending.
+def items_for_apply(session, approved_ids, edits=None, ignore_ids=None):
+    """Return the ResolvedItems to apply: all auto_applied + the decided pending.
 
-    Approved pending items carry an edit in ⟦id:label⟧ token form. If the user
-    left it unchanged, apply the precomputed resolution. If they edited it,
-    detokenize their tokens back to XML by id (tags preserved by id even if the
-    user mistypes a label); on a broken token set we keep the original so the
-    file is never corrupted (apply also guards against any stray markers)."""
+    Each pending segment gets one of three decisions from the UI:
+      - approve (confirm AI fix): apply the precomputed resolution as-is;
+      - edit (apply human change): the edit is in ⟦id:label⟧ token form — detokenize
+        by id back to XML (tags preserved by id even if the user mistypes a label);
+        a broken token set falls back to the original so the file is never corrupted;
+      - ignore (mark false positive): mark every code on the segment ignored, leaving
+        the translation untouched.
+    apply() also guards against any stray markers as a final backstop."""
     from xml.sax.saxutils import escape as _xml_escape
     edits = edits or {}
     out = list(session.auto_applied)
     approved_ids = set(approved_ids or ())
+    ignore_ids = set(ignore_ids or ())
     for it in session.pending:
+        if it.item_id in ignore_ids:
+            ign_res = Resolution(action="ignore", new_target=None, needs_approval=False,
+                                 strategy=it.resolution.strategy,
+                                 rationale="user marked false positive", ignore_codes=[])
+            out.append(replace(it, resolution=ign_res))
+            continue
         if it.item_id not in approved_ids:
             continue
         edited = edits.get(it.item_id)

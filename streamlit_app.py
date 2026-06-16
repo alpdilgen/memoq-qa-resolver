@@ -87,28 +87,40 @@ def render(rs):
                       for r in auto_ignores], use_container_width=True)
 
     st.subheader(f"Need your input ({len(view['pending'])} segments)")
-    st.caption("Inline tags show as memoQ-style chips like `[<cf size=9.5>]`. In the edit box they "
-               "appear as `⟦id:tag⟧` — change the wording freely but keep every `⟦…⟧` marker intact.")
+    st.caption("For each segment pick one: **Confirm AI fix** · **Ignore (false positive)** · "
+               "**Apply my edit**. Inline tags show as chips like `[<cf size=9.5>]`; in the edit box "
+               "they appear as `⟦id:tag⟧` — change the wording freely but keep every `⟦…⟧` marker.")
     pending_items = {it.item_id: it for it in rs.pending}
     approved_ids = set()
+    ignore_ids = set()
     edits = {}
     for r in view["pending"]:
         it = pending_items.get(r["item_id"])
+        has_fix = r["proposed_target"] is not None and r["action"] == "fix"
         with st.expander(f"[{r['code']}] segment {r['tu_id']} — {r['problemname']}"):
             st.text(f"Source:   {to_chips(r['source'])}")
             st.text(f"Current:  {to_chips(r['current_target'])}")
-            if r["proposed_target"] is not None and r["action"] == "fix":
+            if has_fix:
                 st.text(f"Proposed: {to_chips(r['proposed_target'])}")
             st.caption(r["rationale"])
+            options = ["Leave for later"]
+            if has_fix:
+                options.append("Confirm AI fix")
+            options += ["Ignore (false positive)", "Apply my edit"]
+            choice = st.radio("Decision", options, horizontal=True, key=f"dec_{r['item_id']}")
             seed = it.proposed_tokens if it is not None else (r["proposed_target"] or "")
             new = st.text_area("Edit (keep the ⟦…⟧ tags)", value=seed, key=f"edit_{r['item_id']}")
-            if st.checkbox("Approve", key=f"appr_{r['item_id']}"):
+            if choice == "Confirm AI fix":
+                approved_ids.add(r["item_id"])               # apply precomputed AI target
+            elif choice == "Ignore (false positive)":
+                ignore_ids.add(r["item_id"])                  # mark codes ignored, keep translation
+            elif choice == "Apply my edit":
                 approved_ids.add(r["item_id"])
-                edits[r["item_id"]] = new
+                edits[r["item_id"]] = new                      # detokenized + applied
 
     st.divider()
     if st.button("Apply & build corrected file", type="primary"):
-        items = items_for_apply(rs, approved_ids, edits)
+        items = items_for_apply(rs, approved_ids, edits, ignore_ids)
         try:
             fixed = apply(st.session_state["content"], items)
         except Exception as exc:

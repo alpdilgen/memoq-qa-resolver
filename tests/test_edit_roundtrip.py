@@ -32,3 +32,12 @@ def test_broken_tokens_keep_original_not_corrupt():
     # user mangled the token id -> cannot detokenize -> keep original (no corruption)
     out = items_for_apply(_session(it), {"g1:x"}, {"g1:x": "Yeni ⟦9:<ph>⟧"})
     assert out[0] is it
+
+
+def test_ignore_decision_marks_codes_translation_untouched():
+    it = _pending_item()
+    out = items_for_apply(_session(it), approved_ids=set(), edits={}, ignore_ids={"g1:x"})
+    assert len(out) == 1
+    assert out[0].resolution.action == "ignore"
+    assert out[0].resolution.new_target is None   # translation untouched
+    assert out[0].resolution.needs_approval is False
