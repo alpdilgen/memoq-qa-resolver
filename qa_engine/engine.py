@@ -5,6 +5,7 @@ from .registry import STRATEGY_BY_CODE, register_resolver, get_resolver
 from .resolvers.base import normalize_code, ReportOnlyResolver
 from .resolvers.whitespace_resolver import WhitespaceResolver
 from .resolvers.inconsistency_resolver import resolve_inconsistencies
+from .resolvers.inconsistency_xseg import resolve_inconsistency_groups
 from .resolvers.ai_segment_resolver import resolve_segment
 from .qa_codes import BULK_SUITABLE_CODES, RISKY_CODES, describe_code
 from .apply import apply_resolved_items
@@ -50,6 +51,13 @@ def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
     ordered_guids = sorted(by_seg, key=lambda g: int(by_seg[g][0].tu_id)
                            if by_seg[g][0].tu_id.isdigit() else 0)
 
+    # Phase A: cross-segment inconsistency (3100/3101). Unify each group of
+    # identical-source segments to one AI-chosen canonical target BEFORE the
+    # per-segment pass, so the per-segment pass is the single writer.
+    xseg = {}
+    if ai_client is not None:
+        xseg = resolve_inconsistency_groups(issues, members, ai_client)
+
     auto, pending = [], []
     for guid in ordered_guids:
         seg_issues = by_seg[guid]
@@ -70,7 +78,10 @@ def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
         codes = [normalize_code(i.code) for i in seg_issues]
         all_bulk = all(c in BULK_SUITABLE_CODES for c in codes)
 
-        if all_bulk:
+        if guid in xseg:
+            # Phase A already decided this segment's target (cross-segment unification).
+            res = xseg[guid]
+        elif all_bulk:
             res = _WS.resolve(seg_issues[0], member, None)
         elif ai_client is not None:
             res = resolve_segment(member, seg_issues, None, ai_client)
