@@ -4,6 +4,14 @@ from .tags import detokenize
 _MARK = re.compile(r'⟦\d+:.*?⟧')
 _LEAD = re.compile(r'^[ \t]*')
 _TRAIL = re.compile(r'[ \t]*$')
+_RUN = re.compile(r'[ \t]{2,}')
+
+
+def collapse_internal_spaces(text: str) -> str:
+    """Collapse any run of 2+ spaces/tabs to a single space (memoQ code 3050,
+    multiple consecutive whitespaces). Single spaces are untouched, so inline-tag
+    tokens like ⟦1:<cf size=9.5>⟧ (whose labels use single spaces) survive intact."""
+    return _RUN.sub(' ', text)
 
 
 def lead_ws(text: str) -> str:

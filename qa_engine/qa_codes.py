@@ -40,18 +40,18 @@ QA_CODE_DESCRIPTIONS = {
     "3133": "Bold/italic/underline formatting differs from the source.",
 }
 
-# Codes safe to fix mechanically in bulk (no AI judgment needed).
-# Only the tag-boundary / segment-edge codes that align_whitespace truly handles:
+# Codes safe to fix mechanically in bulk (no AI judgment needed):
+#   3050  – multiple consecutive whitespaces (collapse_internal_spaces)
 #   3110  – space at end of segment (edge)
 #   3190  – missing space before tag
 #   3191  – missing space after tag
 #   3192  – extra space before tag
 #   3193  – extra space after tag
-# Codes removed from this set (need AI):
-#   3050  – internal multiple spaces between words
+# Codes still excluded (need AI judgment):
 #   3071–3076 – space missing/extra before/after punctuation sign
 #   3194–3197 – non-breaking space issues
 BULK_SUITABLE_CODES = {
+    "3050",
     "3110",
     "3190",
     "3191",

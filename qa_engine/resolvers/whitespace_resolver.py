@@ -1,18 +1,19 @@
 from ..models import Resolution
-from ..whitespace import align_whitespace
+from ..whitespace import align_whitespace, collapse_internal_spaces
 from ..tags import detokenize, _TOKEN_RE
 from .base import Resolver
 
 
 class WhitespaceResolver(Resolver):
     """Deterministic: align the target's tag-boundary/edge whitespace to the
-    source. Covers codes 3050, 3071-3076, 3110, 3190-3197. Zero-error by
-    construction (only [ \t] adjacent to tags/edges is changed)."""
+    source and collapse internal multi-space runs (3050). Covers codes 3050,
+    3110, 3190-3193. Zero-error by construction (only [ \t] adjacent to
+    tags/edges, or runs of 2+ between words, are changed)."""
 
     strategy = "deterministic"
 
     def resolve(self, issue, member, context) -> Resolution:
-        new_tok = align_whitespace(member.source_text, member.target_text)
+        new_tok = collapse_internal_spaces(align_whitespace(member.source_text, member.target_text))
         if new_tok == member.target_text:
             return Resolution(
                 action="report", new_target=None, confidence=1.0,

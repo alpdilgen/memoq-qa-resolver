@@ -7,11 +7,11 @@ def test_known_descriptions():
     assert "3091" in QA_CODE_DESCRIPTIONS  # terminology
 
 
-def test_bulk_suitable_is_only_tag_boundary_codes():
-    # only the tag-boundary / edge codes align_whitespace truly handles
-    assert BULK_SUITABLE_CODES == {"3110", "3190", "3191", "3192", "3193"}
-    # sign-spacing, internal multi-space and nbsp are NOT bulk (need AI)
-    for c in ("3050", "3073", "3075", "3194", "3196"):
+def test_bulk_suitable_is_whitespace_codes():
+    # tag-boundary / edge codes + internal multi-space (3050), all deterministic
+    assert BULK_SUITABLE_CODES == {"3050", "3110", "3190", "3191", "3192", "3193"}
+    # sign-spacing and nbsp are NOT bulk (need AI)
+    for c in ("3073", "3075", "3194", "3196"):
         assert c not in BULK_SUITABLE_CODES
     assert "3101" not in BULK_SUITABLE_CODES
 
