@@ -1,0 +1,83 @@
+from __future__ import annotations
+from dataclasses import dataclass, field
+from typing import Optional
+
+
+@dataclass
+class Member:
+    tu_id: str
+    segmentguid: str
+    source_text: str            # tokenized (inline tags -> markers)
+    target_text: str            # tokenized
+    source_tags: dict           # marker -> original tag XML
+    target_tags: dict
+    status: str
+    tm_match: Optional[str]     # target of best <mq:insertedmatch>, if any
+    warning_keys: list          # list of (problemname, localizationargs)
+
+
+@dataclass
+class Case:
+    id: str
+    type: str                   # "target_inconsistency" | "source_inconsistency"
+    members: list
+    mechanical_diff: str = ""
+
+    @property
+    def distinct_sources(self) -> set:
+        return {m.source_text for m in self.members}
+
+    @property
+    def distinct_targets(self) -> set:
+        return {m.target_text for m in self.members}
+
+
+@dataclass
+class Decision:
+    case_id: str
+    category: str               # false_positive | pick_best | differentiate | needs_manual
+    rationale: str
+    confidence: str             # high | medium | low
+    chosen_member_id: Optional[str] = None
+    differentiated: list = field(default_factory=list)  # [{"source_key","new_target"}]
+
+
+@dataclass
+class Issue:
+    code: str
+    problemname: str
+    args: str
+    segmentguid: str
+    tu_id: str
+
+
+@dataclass
+class Resolution:
+    action: str                       # "fix" | "ignore" | "report"
+    new_target: Optional[str] = None  # write-ready raw inner XML when action == "fix"
+    confidence: float = 0.0
+    needs_approval: bool = True
+    rationale: str = ""
+    strategy: str = ""                # "deterministic" | "ai" | "report_only"
+
+
+@dataclass
+class ResolvedItem:
+    item_id: str                      # f"{segmentguid}:{code}:{index}"
+    segmentguid: str
+    tu_id: str
+    code: str
+    problemname: str
+    source_preview: str
+    current_target_preview: str
+    proposed_target_preview: Optional[str]
+    resolution: Resolution
+
+
+@dataclass
+class ReviewSession:
+    source_lang: str
+    target_lang: str
+    auto_applied: list                # list[ResolvedItem]  (apply without asking)
+    pending: list                     # list[ResolvedItem]  (need human approval)
+    report_only: list                 # list[ResolvedItem]  (informational)

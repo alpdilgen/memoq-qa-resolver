@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xliff version="1.2" xmlns="urn:oasis:names:tc:xliff:document:1.2" xmlns:mq="MQXliff">
+<file original="check" source-language="en" target-language="el" datatype="x-memoq">
+<body>
+<trans-unit id="1" mq:status="Confirmed" mq:segmentguid="g1">
+<source xml:space="preserve">Color box: </source>
+<target xml:space="preserve">Κουτί χρώματος:</target>
+<mq:warnings40>
+<mq:errorwarning mq:errorwarning-code="03101" mq:errorwarning-categoryid="2" mq:errorwarning-ignorable="errorwarning-ignorable" mq:errorwarning-problemname="inconsistent translation" mq:errorwarning-longdesc="The target segment is also the translation of: Color box:" mq:errorwarning-localizationargs="Color box:&#9;Κουτί χρώματος:" />
+</mq:warnings40>
+</trans-unit>
+<trans-unit id="2" mq:status="Confirmed" mq:segmentguid="g2">
+<source xml:space="preserve">Color box:</source>
+<target xml:space="preserve">Κουτί χρώματος:</target>
+<mq:warnings40>
+<mq:errorwarning mq:errorwarning-code="03101" mq:errorwarning-categoryid="2" mq:errorwarning-ignorable="errorwarning-ignorable" mq:errorwarning-problemname="inconsistent translation" mq:errorwarning-longdesc="The target segment is also the translation of: Color box: " mq:errorwarning-localizationargs="Color box: &#9;Κουτί χρώματος:" />
+</mq:warnings40>
+</trans-unit>
+<trans-unit id="3" mq:status="Confirmed" mq:segmentguid="g3">
+<source xml:space="preserve">Ocean Deep Sand</source>
+<target xml:space="preserve">Ωκεανός Βαθύ Σοφιστικέ</target>
+<mq:warnings40>
+<mq:errorwarning mq:errorwarning-code="03101" mq:errorwarning-categoryid="2" mq:errorwarning-ignorable="errorwarning-ignorable" mq:errorwarning-problemname="inconsistent translation" mq:errorwarning-longdesc="The target segment is also the translation of: Ocean Deep Sage" mq:errorwarning-localizationargs="Ocean Deep Sage&#9;Ωκεανός Βαθύ Σοφιστικέ" />
+</mq:warnings40>
+</trans-unit>
+<trans-unit id="4" mq:status="Confirmed" mq:segmentguid="g4">
+<source xml:space="preserve">Ocean Deep Sage</source>
+<target xml:space="preserve">Ωκεανός Βαθύ Σοφιστικέ</target>
+<mq:warnings40>
+<mq:errorwarning mq:errorwarning-code="03101" mq:errorwarning-categoryid="2" mq:errorwarning-ignorable="errorwarning-ignorable" mq:errorwarning-problemname="inconsistent translation" mq:errorwarning-longdesc="The target segment is also the translation of: Ocean Deep Sand" mq:errorwarning-localizationargs="Ocean Deep Sand&#9;Ωκεανός Βαθύ Σοφιστικέ" />
+</mq:warnings40>
+</trans-unit>
+<trans-unit id="5" mq:status="Confirmed" mq:segmentguid="g5">
+<source xml:space="preserve">Easy to clean</source>
+<target xml:space="preserve">Εύκολο στο Καθάρισμα</target>
+<mq:warnings40>
+<mq:errorwarning mq:errorwarning-code="03101" mq:errorwarning-categoryid="2" mq:errorwarning-ignorable="errorwarning-ignorable" mq:errorwarning-problemname="inconsistent translation" mq:errorwarning-longdesc="The same segment was also translated as: Εύκολο στον καθαρισμό" mq:errorwarning-localizationargs="Easy to clean&#9;Εύκολο στον καθαρισμό" />
+</mq:warnings40>
+</trans-unit>
+<trans-unit id="6" mq:status="Confirmed" mq:segmentguid="g6">
+<source xml:space="preserve">Easy to clean</source>
+<target xml:space="preserve">Εύκολο στον καθαρισμό</target>
+</trans-unit>
+</body>
+</file>
+</xliff>

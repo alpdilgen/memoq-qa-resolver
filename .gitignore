@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.env
+.streamlit/secrets.toml
+out/
+*.FIXED.mqxliff
+*.bak
+# large/private source files — never commit; upload to the running app instead
+/*.mqxliff
+/*.html
+!tests/fixtures/*.mqxliff
