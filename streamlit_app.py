@@ -40,14 +40,21 @@ if rs is None:
 
 if rs is not None:
     view = session_to_view(rs)
-    c1, c2 = st.columns(2)
-    c1.metric("Auto-fixed", len(view["auto_applied"]))
-    c2.metric("Needs your approval", len(view["pending"]))
+    auto_fixes = [r for r in view["auto_applied"] if r["action"] != "ignore"]
+    auto_ignores = [r for r in view["auto_applied"] if r["action"] == "ignore"]
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Auto-fixed", len(auto_fixes))
+    c2.metric("Marked false-positive", len(auto_ignores))
+    c3.metric("Needs your approval", len(view["pending"]))
 
-    with st.expander(f"Auto-applied fixes ({len(view['auto_applied'])})"):
+    with st.expander(f"Auto-applied fixes ({len(auto_fixes)})"):
         st.dataframe([{"code": r["code"], "segment": r["tu_id"],
                        "before": r["current_target"], "after": r["proposed_target"]}
-                      for r in view["auto_applied"]], use_container_width=True)
+                      for r in auto_fixes], use_container_width=True)
+
+    with st.expander(f"False-positive (ignored) — translation kept, flag silenced ({len(auto_ignores)})"):
+        st.dataframe([{"code": r["code"], "segment": r["tu_id"], "rationale": r["rationale"]}
+                      for r in auto_ignores], use_container_width=True)
 
     st.subheader(f"Needs approval ({len(view['pending'])})")
     approved_ids = set()
