@@ -1,48 +1,62 @@
 import re
+import html
 
-# Order matters: match ph (with its content) and self-closing tags before
-# the generic paired-g open/close.
 _TAG_RE = re.compile(
-    r'<bpt\b[^>]*>.*?</bpt>'    # paired begin-tag, opaque (escaped catalog value)
-    r'|<ept\b[^>]*>.*?</ept>'   # paired end-tag, opaque
-    r'|<it\b[^>]*>.*?</it>'     # isolated tag, opaque
-    r'|<ph\b[^>]*>.*?</ph>'     # ph wraps original-format codes -> opaque
-    r'|<x\b[^>]*/>'             # self-closing placeholder
-    r'|<mq:ch\b[^>]*/>'        # self-closing memoQ char
-    r'|<g\b[^>]*>'             # paired open
-    r'|</g>',                   # paired close
+    r'<bpt\b[^>]*>.*?</bpt>'
+    r'|<ept\b[^>]*>.*?</ept>'
+    r'|<it\b[^>]*>.*?</it>'
+    r'|<ph\b[^>]*>.*?</ph>'
+    r'|<x\b[^>]*/>'
+    r'|<mq:ch\b[^>]*/>'
+    r'|<g\b[^>]*>'
+    r'|</g>',
     re.DOTALL,
 )
 
-_OPEN, _CLOSE = "⟦", "⟧"   # ⟦ ⟧  private-ish brackets unlikely in text
-_MARK_RE = re.compile(_OPEN + r"(\d+)" + _CLOSE)
+_OPEN, _CLOSE = "⟦", "⟧"
+# token: ⟦<id>:<label>⟧ — id is authoritative, label is decorative/readable
+_TOKEN_RE = re.compile(_OPEN + r"(\d+):.*?" + _CLOSE)
+_CATALOG_RE = re.compile(r'mmq78catalogvalue=(?:&quot;|")(.*?)(?:&quot;|")')
+_NAME_RE = re.compile(r'</?\s*([A-Za-z][\w:.-]*)')
+
+
+def tag_label(tag_xml: str) -> str:
+    """memoQ-style readable label for an inline tag, from mmq78catalogvalue
+    (double-unescaped); fall back to the tag's local name."""
+    m = _CATALOG_RE.search(tag_xml)
+    if m:
+        lbl = html.unescape(html.unescape(m.group(1))).strip()
+        if lbl:
+            return lbl if lbl.startswith("<") else f"<{lbl}>"
+    name = _NAME_RE.search(tag_xml)
+    nm = name.group(1) if name else "tag"
+    if tag_xml.lstrip().startswith("</"):
+        return f"</{nm}>"
+    if tag_xml.rstrip().endswith("/>"):
+        return f"<{nm}/>"
+    return f"<{nm}>"
 
 
 def tokenize(xml_text: str):
-    """Replace inline tags with ordered markers ⟦N⟧. Returns (text, {marker: xml})."""
+    """Replace inline tags with readable tokens ⟦id:label⟧. Returns (text, {id: xml})."""
     mapping = {}
     counter = [0]
 
     def repl(m):
         counter[0] += 1
-        marker = f"{_OPEN}{counter[0]}{_CLOSE}"
-        mapping[marker] = m.group(0)
-        return marker
+        i = counter[0]
+        mapping[str(i)] = m.group(0)
+        return f"{_OPEN}{i}:{tag_label(m.group(0))}{_CLOSE}"
 
     return _TAG_RE.sub(repl, xml_text), mapping
 
 
 def markers_in(text: str) -> set:
-    return {f"{_OPEN}{n}{_CLOSE}" for n in _MARK_RE.findall(text)}
+    return set(_TOKEN_RE.findall(text))
 
 
 def detokenize(text: str, mapping: dict) -> str:
-    """Restore original tags. Raises ValueError if markers don't match mapping."""
+    """Restore tags by id. Raises ValueError if the ids present don't match mapping."""
     if markers_in(text) != set(mapping.keys()):
-        raise ValueError(
-            f"marker mismatch: text has {markers_in(text)}, mapping has {set(mapping)}"
-        )
-    out = text
-    for marker, xml in mapping.items():
-        out = out.replace(marker, xml)
-    return out
+        raise ValueError(f"token id mismatch: text {markers_in(text)} vs mapping {set(mapping)}")
+    return _TOKEN_RE.sub(lambda m: mapping[m.group(1)], text)
