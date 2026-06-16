@@ -81,6 +81,16 @@ class ResolvedItem:
 
 
 @dataclass
+class Progress:
+    index: int                        # 1-based segment number being processed
+    total: int                        # total flagged segments
+    tu_id: str
+    codes: list                       # normalized codes on this segment
+    problem: str                      # primary problem name
+    verdict: str                      # "fix" | "ignore" | "needs_approval"
+
+
+@dataclass
 class ReviewSession:
     source_lang: str
     target_lang: str

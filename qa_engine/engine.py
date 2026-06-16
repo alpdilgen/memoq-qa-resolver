@@ -1,5 +1,5 @@
 from dataclasses import replace
-from .models import ReviewSession, ResolvedItem, Resolution
+from .models import ReviewSession, ResolvedItem, Resolution, Progress
 from .parser import parse_issues, parse_languages
 from .registry import STRATEGY_BY_CODE, register_resolver, get_resolver
 from .resolvers.base import normalize_code, ReportOnlyResolver
@@ -106,30 +106,38 @@ def reconcile(session) -> None:
             f"ledger mismatch: accounted {accounted} != detected {session.total_issues}")
 
 
-def analyze(content: bytes, ai_client=None, glossary=None, threshold=100) -> ReviewSession:
+def _verdict_label(res) -> str:
+    if res.needs_approval:
+        return "needs_approval"
+    return res.action          # "fix" | "ignore"
+
+
+def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100):
+    """Generator: process each flagged segment in order, yielding a Progress after
+    each one (for a live UI). Returns the finished ReviewSession (PEP 380 — caught
+    via StopIteration.value, or simply use analyze())."""
     src_lang, tgt_lang = parse_languages(content)
     issues, members = parse_issues(content)
     total_issues = len(issues)
 
-    # group issues by segment, preserve segment order (by numeric tu_id)
     by_seg = {}
     for it in issues:
         by_seg.setdefault(it.segmentguid, []).append(it)
     ordered_guids = sorted(by_seg, key=lambda g: int(by_seg[g][0].tu_id)
                            if by_seg[g][0].tu_id.isdigit() else 0)
+    total_segs = len(ordered_guids)
 
-    # Phase A: cross-segment inconsistency (3100/3101). Unify each group of
-    # identical-source segments to one AI-chosen canonical target BEFORE the
-    # per-segment pass, so the per-segment pass is the single writer.
+    # Phase A: cross-segment inconsistency (3100/3101) decided before the per-segment pass.
     xseg = {}
     if ai_client is not None:
         xseg = resolve_inconsistency_groups(issues, members, ai_client)
 
     auto, pending = [], []
-    for guid in ordered_guids:
+    for idx, guid in enumerate(ordered_guids, 1):
         seg_issues = by_seg[guid]
         n_issues = len(seg_issues)
         primary = seg_issues[0]
+        seg_codes = [normalize_code(i.code) for i in seg_issues]
         member = members.get(guid)
         if member is None:
             # pathological: a flagged segment we couldn't parse. Never drop it;
@@ -141,6 +149,8 @@ def analyze(content: bytes, ai_client=None, glossary=None, threshold=100) -> Rev
                 code=primary.code, problemname=primary.problemname,
                 source_preview="", current_target_preview="", proposed_target_preview=None,
                 resolution=res, issue_count=n_issues))
+            yield Progress(idx, total_segs, primary.tu_id, seg_codes,
+                           primary.problemname, "needs_approval")
             continue
         res = _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold)
 
@@ -157,15 +167,24 @@ def analyze(content: bytes, ai_client=None, glossary=None, threshold=100) -> Rev
             resolution=res,
             issue_count=n_issues,
         )
-        if res.needs_approval:
-            pending.append(item)
-        else:
-            auto.append(item)
+        (pending if res.needs_approval else auto).append(item)
+        yield Progress(idx, total_segs, primary.tu_id, seg_codes,
+                       primary.problemname, _verdict_label(res))
 
     session = ReviewSession(src_lang, tgt_lang, auto, pending,
                             report_only=[], total_issues=total_issues)
     reconcile(session)
     return session
+
+
+def analyze(content: bytes, ai_client=None, glossary=None, threshold=100) -> ReviewSession:
+    """Run the full analysis (no progress callbacks). Built on analyze_stream."""
+    gen = analyze_stream(content, ai_client, glossary, threshold)
+    try:
+        while True:
+            next(gen)
+    except StopIteration as stop:
+        return stop.value
 
 
 def apply(content: bytes, items) -> bytes:
