@@ -39,10 +39,14 @@ def _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold) -> Resol
     tag_codes = [c for c in codes if c in TAG_STRUCTURE_CODES]
     content_codes = [c for c in codes
                      if c not in BULK_SUITABLE_CODES and c not in TAG_STRUCTURE_CODES]
+    # 2016 means the target reordered the tags — positional whitespace alignment is
+    # then unreliable, so any whitespace on a reordered segment goes to the AI
+    # (which sees source+target and is tag-guarded) rather than the deterministic aligner.
+    reordered = "2016" in codes
 
-    tag_ignore, additions, remaining_tag = ([], [], [])
+    tag_ignore, tag_target, remaining_tag = ([], None, [])
     if tag_codes:
-        tag_ignore, additions, remaining_tag = plan_tag_structure(member, tag_codes)
+        tag_ignore, tag_target, remaining_tag = plan_tag_structure(member, tag_codes)
 
     base_inner = None
     ignore_content = []
@@ -56,7 +60,8 @@ def _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold) -> Resol
         base_inner, need, conf, rationale = r.new_target, r.needs_approval, r.confidence, r.rationale
         ignore_content = list(r.ignore_codes or [])
         strategy = "ai"
-    elif content_codes:
+    elif content_codes or (ws_codes and reordered):
+        # AI handles content codes and/or whitespace on a reordered segment.
         if ai_client is not None:
             r = resolve_segment(member, seg_issues, None, ai_client, threshold)
             base_inner, need, conf, rationale = r.new_target, r.needs_approval, r.confidence, r.rationale
@@ -64,8 +69,9 @@ def _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold) -> Resol
             strategy = "ai"
         else:
             need, strategy = True, "ai"
-            rationale = "AI required to resolve " + ", ".join(sorted(set(content_codes)))
-    elif ws_codes:                                     # whitespace-only (no content)
+            rationale = ("AI required to resolve "
+                         + ", ".join(sorted(set(content_codes) | (set(ws_codes) if reordered else set()))))
+    elif ws_codes:                                     # whitespace-only, not reordered -> deterministic
         wr = _WS.resolve(seg_issues[0], member, None)
         if wr.new_target is None:                      # already correct -> false positive
             ignore_content = list(dict.fromkeys(ws_codes))
@@ -73,15 +79,10 @@ def _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold) -> Resol
         else:
             base_inner, rationale = wr.new_target, wr.rationale
 
-    # 2011: append the missing self-contained tags to reach count parity.
-    if additions:
-        if base_inner is None:
-            try:
-                base_inner = detokenize(member.target_text, member.target_tags)
-            except ValueError:
-                base_inner, need = None, True
-        if base_inner is not None:
-            base_inner = base_inner + "".join(additions)
+    # 2011: a deterministic tag-structure rewrite (missing tags inserted in source
+    # order) supersedes the text-only base when one was built.
+    if tag_target is not None:
+        base_inner = tag_target
 
     ignore_codes = list(dict.fromkeys(list(ignore_content) + list(tag_ignore)))
     if remaining_tag:                                  # 2010/2015/unsafe 2011 -> human

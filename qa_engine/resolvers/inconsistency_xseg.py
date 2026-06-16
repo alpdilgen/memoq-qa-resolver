@@ -58,11 +58,22 @@ def _detok(canonical_tok, target_tags):
         return None, False
 
 
+_NORM_STRIP = " \t\r\n.,:;!? \"'()[]{}"
+
+
+def _norm_source(text: str) -> str:
+    """Normalization key for grouping inconsistency occurrences: case-fold and
+    strip surrounding whitespace/punctuation so brand/entity variants that differ
+    only in casing or a trailing period ('MaxMor ... Ltd' vs 'Maxmor ... Ltd.')
+    cluster together — matching how memoQ itself flags them as the same source."""
+    return (text or "").strip(_NORM_STRIP).casefold()
+
+
 def resolve_inconsistency_groups(issues, members_by_guid, ai_client) -> dict:
-    """Group flagged members by source, pick a canonical target per group, and
-    return {segmentguid: Resolution} for every member of a group that actually
-    needs unifying (more than one distinct target). Groups already consistent are
-    left out (the engine handles them / they re-QA clean)."""
+    """Group flagged members by NORMALIZED source, pick a canonical target per
+    group, and return {segmentguid: Resolution} for every member of a group that
+    actually needs unifying (more than one distinct target). Groups already
+    consistent are left out (the engine handles them / they re-QA clean)."""
     # segments carrying a 3100/3101 issue, de-duplicated, in first-seen order
     flagged, seen = [], set()
     for i in issues:
@@ -74,13 +85,14 @@ def resolve_inconsistency_groups(issues, members_by_guid, ai_client) -> dict:
     for guid in flagged:
         m = members_by_guid.get(guid)
         if m is not None:
-            groups.setdefault(m.source_text, []).append(m)
+            groups.setdefault(_norm_source(m.source_text), []).append(m)
 
     out = {}
-    for source, members in groups.items():
+    for _key, members in groups.items():
         distinct = {m.target_text for m in members}
         if len(distinct) <= 1:
             continue  # already consistent — nothing to unify
+        source = members[0].source_text   # a real representative source for the prompt
         # variant -> count, most common first (gives the AI document-frequency signal)
         counts = {}
         for m in members:
