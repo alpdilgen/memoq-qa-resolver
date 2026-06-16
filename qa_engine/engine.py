@@ -27,9 +27,21 @@ def _disp(text, tags):
         return text
 
 
+def reconcile(session) -> None:
+    """Ledger invariant: every detected issue lands in exactly one bucket.
+    Asserts fix + ignore + needs_approval == total_issues. A mismatch means an
+    issue was silently dropped (a bug)."""
+    accounted = sum(it.issue_count for it in session.auto_applied)
+    accounted += sum(it.issue_count for it in session.pending)
+    if accounted != session.total_issues:
+        raise AssertionError(
+            f"ledger mismatch: accounted {accounted} != detected {session.total_issues}")
+
+
 def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
     src_lang, tgt_lang = parse_languages(content)
     issues, members = parse_issues(content)
+    total_issues = len(issues)
 
     # group issues by segment, preserve segment order (by numeric tu_id)
     by_seg = {}
@@ -41,8 +53,19 @@ def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
     auto, pending = [], []
     for guid in ordered_guids:
         seg_issues = by_seg[guid]
+        n_issues = len(seg_issues)
+        primary = seg_issues[0]
         member = members.get(guid)
         if member is None:
+            # pathological: a flagged segment we couldn't parse. Never drop it;
+            # surface as needs_approval so it stays in the ledger.
+            res = Resolution(action="fix", new_target=None, needs_approval=True,
+                             strategy="ai", rationale="segment not found; handle manually.")
+            pending.append(ResolvedItem(
+                item_id=f"{guid}:{primary.code}", segmentguid=guid, tu_id=primary.tu_id,
+                code=primary.code, problemname=primary.problemname,
+                source_preview="", current_target_preview="", proposed_target_preview=None,
+                resolution=res, issue_count=n_issues))
             continue
         codes = [normalize_code(i.code) for i in seg_issues]
         all_bulk = all(c in BULK_SUITABLE_CODES for c in codes)
@@ -60,11 +83,18 @@ def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
                                        + ", ".join(sorted(set(codes)))
                                        + "; enable AI or fix manually.")
 
+        # Deterministic no-op (whitespace already aligned / nothing to change):
+        # this is a false positive -> IGNORE (accounted), never silently skipped.
+        if (res.new_target is None and res.strategy == "deterministic"
+                and res.action in ("fix", "report")):
+            res = Resolution(action="ignore", new_target=None, needs_approval=False,
+                             strategy="deterministic",
+                             rationale="flagged but target already correct (false positive)")
+
         # Risky tag-structure codes must never auto-apply; force approval.
         if any(c in RISKY_CODES for c in codes):
             res = replace(res, needs_approval=True)
 
-        primary = seg_issues[0]
         src_disp = _disp(member.source_text, member.source_tags)
         cur_disp = _disp(member.target_text, member.target_tags)
         prop_disp = res.new_target if res.new_target is not None else cur_disp
@@ -76,18 +106,17 @@ def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
             current_target_preview=cur_disp,
             proposed_target_preview=prop_disp,
             resolution=res,
+            issue_count=n_issues,
         )
-        # deterministic no-op (whitespace already aligned) -> nothing to do; skip it
-        if res.action == "fix" and res.new_target is None and res.strategy == "deterministic":
-            continue
-        if res.action == "report" and res.new_target is None and res.strategy == "deterministic":
-            continue
         if res.needs_approval:
             pending.append(item)
         else:
             auto.append(item)
 
-    return ReviewSession(src_lang, tgt_lang, auto, pending, report_only=[])
+    session = ReviewSession(src_lang, tgt_lang, auto, pending,
+                            report_only=[], total_issues=total_issues)
+    reconcile(session)
+    return session
 
 
 def apply(content: bytes, items) -> bytes:
