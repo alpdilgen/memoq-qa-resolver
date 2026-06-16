@@ -49,6 +49,7 @@ class Issue:
     args: str
     segmentguid: str
     tu_id: str
+    outcome: str = "needs_approval"   # ledger bucket: "fix" | "ignore" | "needs_approval"
 
 
 @dataclass
@@ -72,6 +73,7 @@ class ResolvedItem:
     current_target_preview: str
     proposed_target_preview: Optional[str]
     resolution: Resolution
+    issue_count: int = 1              # number of QA issues this item accounts for (ledger)
 
 
 @dataclass
@@ -81,3 +83,4 @@ class ReviewSession:
     auto_applied: list                # list[ResolvedItem]  (apply without asking)
     pending: list                     # list[ResolvedItem]  (need human approval)
     report_only: list                 # list[ResolvedItem]  (informational)
+    total_issues: int = 0             # X = count of detected QA issues, for reconcile
