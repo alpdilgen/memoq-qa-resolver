@@ -1,26 +1,11 @@
 import json
-from dataclasses import asdict
 from .engine import analyze, apply
 from .glossary import load_glossary
 
 
 def _session_to_dict(rs):
-    def items(bucket):
-        return [
-            {
-                "item_id": it.item_id, "segmentguid": it.segmentguid, "tu_id": it.tu_id,
-                "code": it.code, "problemname": it.problemname,
-                "source": it.source_preview, "current_target": it.current_target_preview,
-                "proposed_target": it.proposed_target_preview,
-                **asdict(it.resolution),
-            } for it in bucket
-        ]
-    return {
-        "source_lang": rs.source_lang, "target_lang": rs.target_lang,
-        "auto_applied": items(rs.auto_applied),
-        "pending": items(rs.pending),
-        "report_only": items(rs.report_only),
-    }
+    from .engine import session_to_view
+    return session_to_view(rs)
 
 
 def run_qa_analyze(in_path, out_path, ai_client=None, glossary_path=None):

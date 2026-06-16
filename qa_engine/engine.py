@@ -1,3 +1,4 @@
+from dataclasses import replace
 from .models import ReviewSession, ResolvedItem
 from .parser import parse_issues, parse_languages
 from .registry import STRATEGY_BY_CODE, register_resolver, get_resolver
@@ -62,3 +63,46 @@ def apply(content: bytes, items) -> bytes:
     """Apply the given ResolvedItems (typically auto_applied + approved pending)
     and return corrected mqxliff bytes."""
     return apply_resolved_items(content, items)
+
+
+def session_to_view(session) -> dict:
+    """Serializable view-model of a ReviewSession for any front-end."""
+    def rows(bucket):
+        out = []
+        for it in bucket:
+            r = it.resolution
+            out.append({
+                "item_id": it.item_id, "code": it.code, "tu_id": it.tu_id,
+                "problemname": it.problemname, "source": it.source_preview,
+                "current_target": it.current_target_preview,
+                "proposed_target": it.proposed_target_preview,
+                "action": r.action, "confidence": r.confidence,
+                "needs_approval": r.needs_approval, "strategy": r.strategy,
+                "rationale": r.rationale,
+            })
+        return out
+    return {
+        "source_lang": session.source_lang, "target_lang": session.target_lang,
+        "auto_applied": rows(session.auto_applied),
+        "pending": rows(session.pending),
+        "report_only": rows(session.report_only),
+    }
+
+
+def items_for_apply(session, approved_ids, edits=None):
+    """Return the ResolvedItems to apply: all auto_applied + approved pending.
+    For an approved pending item with an edit, force action='fix' with the
+    edited target text (written verbatim; engine.apply validates the XML)."""
+    edits = edits or {}
+    out = list(session.auto_applied)
+    approved_ids = set(approved_ids or ())
+    for it in session.pending:
+        if it.item_id not in approved_ids:
+            continue
+        edited = edits.get(it.item_id)
+        if edited is not None and edited != (it.resolution.new_target or ""):
+            new_res = replace(it.resolution, action="fix", new_target=edited)
+            out.append(replace(it, resolution=new_res))
+        else:
+            out.append(it)
+    return out
