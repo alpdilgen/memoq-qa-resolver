@@ -55,6 +55,14 @@ def markers_in(text: str) -> set:
     return set(_TOKEN_RE.findall(text))
 
 
+def to_chips(text: str) -> str:
+    """Render a segment for human display: inline tags (raw XML or ⟦id:label⟧
+    tokens) become memoQ-style chips like [<cf size=9.5>] / [</strong>]. Used by
+    the UI only — never for the write-back path."""
+    text = _TOKEN_RE.sub(lambda m: f"[{m.group(0).split(':', 1)[1][:-1]}]", text)
+    return _TAG_RE.sub(lambda m: f"[{tag_label(m.group(0))}]", text)
+
+
 def detokenize(text: str, mapping: dict) -> str:
     """Restore tags by id. Raises ValueError if the ids present don't match mapping."""
     if markers_in(text) != set(mapping.keys()):
