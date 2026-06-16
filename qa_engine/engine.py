@@ -6,7 +6,7 @@ from .resolvers.base import normalize_code, ReportOnlyResolver
 from .resolvers.whitespace_resolver import WhitespaceResolver
 from .resolvers.inconsistency_resolver import resolve_inconsistencies
 from .resolvers.ai_segment_resolver import resolve_segment
-from .qa_codes import BULK_SUITABLE_CODES, describe_code
+from .qa_codes import BULK_SUITABLE_CODES, RISKY_CODES, describe_code
 from .apply import apply_resolved_items
 from .tags import detokenize
 
@@ -59,6 +59,10 @@ def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
                              rationale="AI is required to resolve "
                                        + ", ".join(sorted(set(codes)))
                                        + "; enable AI or fix manually.")
+
+        # Risky tag-structure codes must never auto-apply; force approval.
+        if any(c in RISKY_CODES for c in codes):
+            res = replace(res, needs_approval=True)
 
         primary = seg_issues[0]
         src_disp = _disp(member.source_text, member.source_tags)
