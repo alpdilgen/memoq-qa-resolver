@@ -115,7 +115,8 @@ def apply_resolved_items(content: bytes, items) -> bytes:
         if it.resolution.action == "fix" and it.resolution.new_target is not None:
             new_target = it.resolution.new_target
             # Safety net: internal tokenisation markers must never be written as
-            # literal text.  If they slipped through upstream, skip this segment
+            # literal text. Tokens are ⟦id:label⟧; the ⟦/⟧ delimiters are what we
+            # guard on. If they slipped through upstream, skip this segment
             # entirely so the original target is preserved untouched.
             if "⟦" in new_target or "⟧" in new_target:
                 continue

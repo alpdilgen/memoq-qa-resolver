@@ -9,53 +9,53 @@ def _m(tu_id, src, tgt, tags=None):
 
 
 def test_edge_helpers():
-    assert lead_ws("   ⟦1⟧x") == "   "
-    assert trail_ws("x⟦1⟧   ") == "   "
-    assert lead_ws("⟦1⟧x") == ""
+    assert lead_ws("   ⟦1:<g>⟧x") == "   "
+    assert trail_ws("x⟦1:<g>⟧   ") == "   "
+    assert lead_ws("⟦1:<g>⟧x") == ""
 
 
 def test_align_removes_tag_adjacent_spaces():
-    src = "⟦1⟧⟦2⟧Perfect Size⟦3⟧⟦4⟧"
-    tgt = "⟦1⟧ ⟦2⟧ Ιδανικό Μέγεθος ⟦3⟧ ⟦4⟧"
-    assert align_whitespace(src, tgt) == "⟦1⟧⟦2⟧Ιδανικό Μέγεθος⟦3⟧⟦4⟧"
+    src = "⟦1:<g>⟧⟦2:<g>⟧Perfect Size⟦3:</g>⟧⟦4:</g>⟧"
+    tgt = "⟦1:<g>⟧ ⟦2:<g>⟧ Ιδανικό Μέγεθος ⟦3:</g>⟧ ⟦4:</g>⟧"
+    assert align_whitespace(src, tgt) == "⟦1:<g>⟧⟦2:<g>⟧Ιδανικό Μέγεθος⟦3:</g>⟧⟦4:</g>⟧"
 
 
 def test_align_keeps_source_boundary_spaces():
-    src = "⟦1⟧ Perfect Size ⟦2⟧"      # source HAS a space inside the tags
-    tgt = "⟦1⟧Ιδανικό Μέγεθος⟦2⟧"
-    assert align_whitespace(src, tgt) == "⟦1⟧ Ιδανικό Μέγεθος ⟦2⟧"
+    src = "⟦1:<g>⟧ Perfect Size ⟦2:</g>⟧"      # source HAS a space inside the tags
+    tgt = "⟦1:<g>⟧Ιδανικό Μέγεθος⟦2:</g>⟧"
+    assert align_whitespace(src, tgt) == "⟦1:<g>⟧ Ιδανικό Μέγεθος ⟦2:</g>⟧"
 
 
 def test_align_preserves_internal_and_edges():
-    src = "⟦1⟧Mattress:⟦2⟧"
-    tgt = "          ⟦1⟧Στρώμα:⟦2⟧          "   # leading+trailing edge ws
-    assert align_whitespace(src, tgt) == "⟦1⟧Στρώμα:⟦2⟧"
+    src = "⟦1:<g>⟧Mattress:⟦2:</g>⟧"
+    tgt = "          ⟦1:<g>⟧Στρώμα:⟦2:</g>⟧          "   # leading+trailing edge ws
+    assert align_whitespace(src, tgt) == "⟦1:<g>⟧Στρώμα:⟦2:</g>⟧"
 
 
 def test_align_skips_on_marker_count_mismatch():
-    src = "⟦1⟧X"
-    tgt = "⟦1⟧ Υ ⟦2⟧"                 # extra marker -> cannot align
+    src = "⟦1:<g>⟧X"
+    tgt = "⟦1:<g>⟧ Υ ⟦2:</g>⟧"                 # extra marker -> cannot align
     assert align_whitespace(src, tgt) == tgt   # unchanged
 
 
 def test_align_leaves_nbsp_untouched():
-    src = "⟦1⟧X⟦2⟧"
-    tgt = "⟦1⟧\xa0Υ\xa0⟦2⟧"           # nbsp adjacent to tags, not [ \t]
+    src = "⟦1:<g>⟧X⟦2:</g>⟧"
+    tgt = "⟦1:<g>⟧\xa0Υ\xa0⟦2:</g>⟧"           # nbsp adjacent to tags, not [ \t]
     assert align_whitespace(src, tgt) == tgt
 
 
 def test_compute_fixes_shape_and_detokenize():
-    tags = {"⟦1⟧": '<ph id="1"/>'}
-    members = [_m("1", "⟦1⟧Mattress:", "   ⟦1⟧Στρώμα:", tags=tags)]
+    tags = {"1": '<ph id="1"/>'}               # mapping keyed by token id
+    members = [_m("1", "⟦1:<ph/>⟧Mattress:", "   ⟦1:<ph/>⟧Στρώμα:", tags=tags)]
     fixes = compute_ws_fixes(members)
     assert len(fixes) == 1
     f = fixes[0]
     assert f["tu_id"] == "1"
     assert f["new_target_inner"] == '<ph id="1"/>Στρώμα:'   # markers restored, ws fixed
-    assert f["new_preview"] == "⟦1⟧Στρώμα:"
+    assert f["new_preview"] == "⟦1:<ph/>⟧Στρώμα:"
 
 
 def test_normalize_members_in_place():
-    members = [_m("1", "⟦1⟧⟦2⟧X⟦3⟧", "⟦1⟧ ⟦2⟧ Υ ⟦3⟧")]
+    members = [_m("1", "⟦1:<g>⟧⟦2:<g>⟧X⟦3:</g>⟧", "⟦1:<g>⟧ ⟦2:<g>⟧ Υ ⟦3:</g>⟧")]
     normalize_members(members)
-    assert members[0].target_text == "⟦1⟧⟦2⟧Υ⟦3⟧"
+    assert members[0].target_text == "⟦1:<g>⟧⟦2:<g>⟧Υ⟦3:</g>⟧"

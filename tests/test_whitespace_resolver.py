@@ -7,7 +7,7 @@ def _member(src, tgt, tags=None):
 
 
 def test_resolves_tag_adjacent_space_as_auto_fix():
-    m = _member("⟦1⟧⟦2⟧Perfect Size⟦3⟧", "⟦1⟧ ⟦2⟧ Ιδανικό ⟦3⟧", tags={})
+    m = _member("⟦1:<g>⟧⟦2:<g>⟧Perfect Size⟦3:</g>⟧", "⟦1:<g>⟧ ⟦2:<g>⟧ Ιδανικό ⟦3:</g>⟧", tags={})
     r = WhitespaceResolver().resolve(Issue("3193", "extra space after tag", "", "g1", "1"), m, None)
     assert r.action == "fix"
     assert r.strategy == "deterministic"
@@ -17,6 +17,6 @@ def test_resolves_tag_adjacent_space_as_auto_fix():
 
 
 def test_no_change_returns_report():
-    m = _member("⟦1⟧X⟦2⟧", "⟦1⟧Υ⟦2⟧")
+    m = _member("⟦1:<g>⟧X⟦2:</g>⟧", "⟦1:<g>⟧Υ⟦2:</g>⟧")
     r = WhitespaceResolver().resolve(Issue("3050", "multiple consecutive whitespaces", "", "g1", "1"), m, None)
     assert r.action == "report"   # nothing to fix (already aligned) -> informational

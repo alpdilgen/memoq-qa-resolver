@@ -37,7 +37,7 @@ def test_needs_approval_when_not_auto():
 
 def test_marker_mismatch_falls_back_to_needs_approval_report():
     # AI returned a target with a bogus marker not in the segment's tags
-    fake = _Fake({"verdict": "fix", "fixed_target": "Νέο ⟦9⟧", "auto_apply": True, "confidence": "high",
+    fake = _Fake({"verdict": "fix", "fixed_target": "Νέο ⟦9:<g>⟧", "auto_apply": True, "confidence": "high",
                   "rationale": "x"})
     issues = [Issue("3101", "inconsistent translation", "x", "g5", "5")]
     res = resolve_segment(_member("X", "Y", tags={}), issues, context=None, ai_client=fake)

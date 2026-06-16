@@ -1,6 +1,6 @@
 from ..models import Resolution
 from ..whitespace import align_whitespace
-from ..tags import detokenize, _MARK_RE
+from ..tags import detokenize, _TOKEN_RE
 from .base import Resolver
 
 
@@ -22,7 +22,7 @@ class WhitespaceResolver(Resolver):
         if member.target_tags:
             new_inner = detokenize(new_tok, member.target_tags)
         else:
-            new_inner = _MARK_RE.sub("", new_tok)
+            new_inner = _TOKEN_RE.sub("", new_tok)
         return Resolution(
             action="fix", new_target=new_inner, confidence=1.0,
             needs_approval=False, strategy="deterministic",

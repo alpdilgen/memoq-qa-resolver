@@ -1,7 +1,7 @@
 import re
 from .tags import detokenize
 
-_MARK = re.compile(r'⟦\d+⟧')
+_MARK = re.compile(r'⟦\d+:.*?⟧')
 _LEAD = re.compile(r'^[ \t]*')
 _TRAIL = re.compile(r'[ \t]*$')
 

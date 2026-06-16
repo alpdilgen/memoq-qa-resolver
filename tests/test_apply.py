@@ -120,11 +120,11 @@ def test_differentiate_tag_mismatch_skips_member_without_crashing(tmp_path):
     # new_target with a bogus marker that is NOT in the member's target_tags
     dec = Decision(tc.id, "differentiate", "x", "high",
                    differentiated=[{"source_key": "Ocean Deep Sand",
-                                    "new_target": "Άμμος ⟦9⟧"}])
+                                    "new_target": "Άμμος ⟦9:<g>⟧"}])
     skipped = apply_decisions(str(src), {tc.id: dec}, cases, str(out))  # must NOT raise
     assert any(t == "3" or t == "4" for (_c, t, _r) in skipped) or len(skipped) >= 1
     # output still well-formed and the bogus target was NOT written
-    assert "⟦9⟧" not in out.read_text(encoding="utf-8-sig")
+    assert "⟦9:<g>⟧" not in out.read_text(encoding="utf-8-sig")
 
 
 def test_apply_handles_ampersand_in_target(tmp_path):
