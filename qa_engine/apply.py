@@ -20,12 +20,27 @@ def _set_target(block: str, new_inner: str) -> str:
     return _TARGET_RE.sub(lambda m: m.group(1) + new_inner + m.group(3), block, count=1)
 
 
-def _mark_ignored(block: str) -> str:
-    """Add the ignored attribute to every errorwarning on the segment that lacks it."""
+def _norm(code: str) -> str:
+    try:
+        return str(int(code))
+    except (TypeError, ValueError):
+        return code or ""
+
+
+def _mark_ignored(block: str, codes=None) -> str:
+    """Add the ignored attribute to errorwarnings on the segment. When `codes` is
+    None, mark every errorwarning; otherwise only those whose code is in `codes`
+    (normalized, e.g. '2016' matches '02016')."""
+    want = None if codes is None else {_norm(c) for c in codes}
+
     def repl(m):
         ew = m.group(0)
         if "errorwarning-ignored=" in ew:
             return ew
+        if want is not None:
+            cm = re.search(r'mq:errorwarning-code="([^"]+)"', ew)
+            if cm is None or _norm(cm.group(1)) not in want:
+                return ew
         return ew[:-2].rstrip() + ' mq:errorwarning-ignored="errorwarning-ignored" />'
     return re.sub(r"<mq:errorwarning\b[^>]*/>", repl, block)
 
@@ -109,34 +124,47 @@ def apply_resolved_items(content: bytes, items) -> bytes:
     target inner (and removes that segment's inconsistency warning); action ==
     'ignore' marks the segment's inconsistency warnings ignored; 'report' is skipped."""
     text = content.decode("utf-8-sig")
-    by_guid = {}   # segmentguid -> ("settarget", inner) | ("ignore",)
-    # First pass: fixes win.
+    # segmentguid -> {"target": inner|None, "ignore": set|None}
+    # "ignore" None as a sentinel means "mark every code on the segment".
+    plan = {}
+
+    def _slot(guid):
+        return plan.setdefault(guid, {"target": None, "ignore": set()})
+
     for it in items:
-        if it.resolution.action == "fix" and it.resolution.new_target is not None:
-            new_target = it.resolution.new_target
+        r = it.resolution
+        guid = it.segmentguid
+        # Target rewrite (any code that produced a corrected target).
+        if r.new_target is not None:
             # Safety net: internal tokenisation markers must never be written as
             # literal text. Tokens are ⟦id:label⟧; the ⟦/⟧ delimiters are what we
-            # guard on. If they slipped through upstream, skip this segment
-            # entirely so the original target is preserved untouched.
-            if "⟦" in new_target or "⟧" in new_target:
-                continue
-            by_guid[it.segmentguid] = ("settarget", new_target)
-    # Second pass: ignore only where there is no fix.
-    for it in items:
-        if it.resolution.action == "ignore" and it.segmentguid not in by_guid:
-            by_guid[it.segmentguid] = ("ignore",)
+            # guard on. If they slipped through upstream, skip the rewrite so the
+            # original target is preserved untouched.
+            if "⟦" not in r.new_target and "⟧" not in r.new_target:
+                _slot(guid)["target"] = r.new_target
+        # Per-code ignores (false positives) — recorded alongside any rewrite.
+        if r.ignore_codes:
+            slot = _slot(guid)
+            if slot["ignore"] is not None:
+                slot["ignore"].update(_norm(c) for c in r.ignore_codes)
+        elif r.action == "ignore" and r.new_target is None:
+            # legacy / pure false positive: ignore every code on the segment
+            _slot(guid)["ignore"] = None
 
     def edit_block(match):
         block = match.group(0)
         guid = _segguid(block)
-        act = by_guid.get(guid)
+        act = plan.get(guid)
         if not act:
             return block
-        if act[0] == "settarget":
-            block = _set_target(block, act[1])
-            return _remove_inconsistency_warnings(block)
-        if act[0] == "ignore":
-            return _mark_ignored(block)
+        if act["target"] is not None:
+            block = _set_target(block, act["target"])
+            block = _remove_inconsistency_warnings(block)
+        ign = act["ignore"]
+        if ign is None:
+            block = _mark_ignored(block)            # all codes
+        elif ign:
+            block = _mark_ignored(block, ign)        # specific codes
         return block
 
     new_text = _TU_RE.sub(edit_block, text)

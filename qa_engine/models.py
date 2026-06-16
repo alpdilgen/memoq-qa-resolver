@@ -55,11 +55,15 @@ class Issue:
 @dataclass
 class Resolution:
     action: str                       # "fix" | "ignore" | "report"
-    new_target: Optional[str] = None  # write-ready raw inner XML when action == "fix"
+    new_target: Optional[str] = None  # write-ready raw inner XML when target is rewritten
     confidence: float = 0.0
     needs_approval: bool = True
     rationale: str = ""
     strategy: str = ""                # "deterministic" | "ai" | "report_only"
+    # Per-code outcomes (conservation): codes on this segment to mark ignored
+    # (false positives, e.g. a valid 2016 reorder) IN ADDITION to any target
+    # rewrite. Empty + action=="ignore" means "ignore every code on the segment".
+    ignore_codes: list = field(default_factory=list)
 
 
 @dataclass
