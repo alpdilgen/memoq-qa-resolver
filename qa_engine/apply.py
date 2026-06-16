@@ -21,11 +21,9 @@ def _set_target(block: str, new_inner: str) -> str:
 
 
 def _mark_ignored(block: str) -> str:
-    """Add the ignored attribute to inconsistency errorwarnings lacking it."""
+    """Add the ignored attribute to every errorwarning on the segment that lacks it."""
     def repl(m):
         ew = m.group(0)
-        if "inconsistent translation" not in ew:
-            return ew
         if "errorwarning-ignored=" in ew:
             return ew
         return ew[:-2].rstrip() + ' mq:errorwarning-ignored="errorwarning-ignored" />'
