@@ -157,6 +157,9 @@ def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100)
         src_disp = _disp(member.source_text, member.source_tags)
         cur_disp = _disp(member.target_text, member.target_tags)
         prop_disp = res.new_target if res.new_target is not None else cur_disp
+        # Token-form proposal seeds the edit box and round-trips by id on apply;
+        # fall back to the current target's tokens when there's no rewrite.
+        prop_tokens = res.new_target_tokens if res.new_target_tokens is not None else member.target_text
         item = ResolvedItem(
             item_id=f"{guid}:{primary.code}",
             segmentguid=guid, tu_id=primary.tu_id,
@@ -166,6 +169,8 @@ def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100)
             proposed_target_preview=prop_disp,
             resolution=res,
             issue_count=n_issues,
+            tags=dict(member.target_tags),
+            proposed_tokens=prop_tokens,
         )
         (pending if res.needs_approval else auto).append(item)
         yield Progress(idx, total_segs, primary.tu_id, seg_codes,
@@ -219,8 +224,13 @@ def session_to_view(session) -> dict:
 
 def items_for_apply(session, approved_ids, edits=None):
     """Return the ResolvedItems to apply: all auto_applied + approved pending.
-    For an approved pending item with an edit, force action='fix' with the
-    edited target text (written verbatim; engine.apply validates the XML)."""
+
+    Approved pending items carry an edit in ⟦id:label⟧ token form. If the user
+    left it unchanged, apply the precomputed resolution. If they edited it,
+    detokenize their tokens back to XML by id (tags preserved by id even if the
+    user mistypes a label); on a broken token set we keep the original so the
+    file is never corrupted (apply also guards against any stray markers)."""
+    from xml.sax.saxutils import escape as _xml_escape
     edits = edits or {}
     out = list(session.auto_applied)
     approved_ids = set(approved_ids or ())
@@ -228,9 +238,15 @@ def items_for_apply(session, approved_ids, edits=None):
         if it.item_id not in approved_ids:
             continue
         edited = edits.get(it.item_id)
-        if edited is not None and edited != (it.resolution.new_target or ""):
-            new_res = replace(it.resolution, action="fix", new_target=edited)
-            out.append(replace(it, resolution=new_res))
-        else:
+        if edited is None or edited == it.proposed_tokens:
             out.append(it)
+            continue
+        try:
+            new_inner = (detokenize(_xml_escape(edited), it.tags)
+                         if it.tags else detokenize(edited, it.tags))
+        except ValueError:
+            out.append(it)   # broken tokens -> keep the safe original
+            continue
+        new_res = replace(it.resolution, action="fix", new_target=new_inner)
+        out.append(replace(it, resolution=new_res))
     return out

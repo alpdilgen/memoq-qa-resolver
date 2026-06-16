@@ -99,4 +99,5 @@ def resolve_segment(member, issues, context, ai_client, threshold=100) -> Resolu
                           rationale="AI changed the tag markers; review manually. " + rationale)
     return Resolution(action="fix", new_target=new_inner, confidence=conf,
                       needs_approval=conf_int < threshold, strategy="ai",
-                      rationale=rationale, ignore_codes=fp_codes)
+                      rationale=rationale, ignore_codes=fp_codes,
+                      new_target_tokens=fixed_tok)

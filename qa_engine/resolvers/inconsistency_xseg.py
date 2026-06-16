@@ -111,5 +111,6 @@ def resolve_inconsistency_groups(issues, members_by_guid, ai_client) -> dict:
             else:
                 out[m.segmentguid] = Resolution(
                     action="fix", new_target=new_inner, confidence=conf,
-                    needs_approval=not auto, strategy="ai", rationale=rationale)
+                    needs_approval=not auto, strategy="ai", rationale=rationale,
+                    new_target_tokens=canonical)
     return out

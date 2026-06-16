@@ -28,4 +28,5 @@ class WhitespaceResolver(Resolver):
             action="fix", new_target=new_inner, confidence=1.0,
             needs_approval=False, strategy="deterministic",
             rationale="Aligned target tag-boundary/edge whitespace to the source.",
+            new_target_tokens=new_tok,
         )

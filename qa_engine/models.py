@@ -64,6 +64,7 @@ class Resolution:
     # (false positives, e.g. a valid 2016 reorder) IN ADDITION to any target
     # rewrite. Empty + action=="ignore" means "ignore every code on the segment".
     ignore_codes: list = field(default_factory=list)
+    new_target_tokens: Optional[str] = None  # the fix in ⟦id:label⟧ form (for UI editing)
 
 
 @dataclass
@@ -78,6 +79,8 @@ class ResolvedItem:
     proposed_target_preview: Optional[str]
     resolution: Resolution
     issue_count: int = 1              # number of QA issues this item accounts for (ledger)
+    tags: dict = field(default_factory=dict)   # target tag map, for edit round-trip
+    proposed_tokens: str = ""         # proposed target in ⟦id:label⟧ form (edit box seed)
 
 
 @dataclass
