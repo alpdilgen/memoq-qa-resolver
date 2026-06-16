@@ -1,77 +1,102 @@
-import json
 from xml.sax.saxutils import escape as _xml_escape
 from ..models import Resolution
-from ..tags import detokenize, markers_in
+from ..tags import detokenize
+from ..taginv import count_parity
 from ..qa_codes import describe_code
+from ..whitespace import align_whitespace, collapse_internal_spaces
+from .base import normalize_code
 
 SEGMENT_SCHEMA = {
     "type": "object",
     "properties": {
-        "verdict": {"type": "string", "enum": ["fix", "false_positive"]},
+        "code_verdicts": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string"},
+                    "verdict": {"type": "string", "enum": ["fix", "false_positive"]},
+                },
+                "required": ["code", "verdict"],
+                "additionalProperties": False,
+            },
+        },
         "fixed_target": {"type": "string"},
-        "auto_apply": {"type": "boolean"},
-        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "confidence": {"type": "integer", "minimum": 0, "maximum": 100},
         "rationale": {"type": "string"},
     },
-    "required": ["verdict", "fixed_target", "auto_apply", "confidence", "rationale"],
+    "required": ["code_verdicts", "fixed_target", "confidence", "rationale"],
     "additionalProperties": False,
 }
 
-_SYSTEM = """You fix one translation segment that memoQ's QA flagged (any language pair).
-Inline tags are shown as markers like ⟦1⟧ — keep every marker exactly, never add or drop one.
-You are given the QA issue(s) with their official meaning, the source, the current target, and
-the localization args memoQ provided. Return the corrected target. Set auto_apply=true ONLY when
-the fix is unambiguous and safe (e.g. a clear mechanical or factual correction); set auto_apply=false
-when a human should confirm (anything requiring stylistic/semantic judgment, terminology choices,
-restructuring, or where you are not fully certain). If the current target is already correct for the
-flagged issue, return it unchanged with auto_apply=true and say so in the rationale.
+_SYSTEM = """You resolve one translation segment that memoQ QA flagged (any language pair).
+Inline tags appear as markers ⟦id:label⟧ (e.g. ⟦1:<cf size=9.5>⟧). KEEP EVERY marker exactly as
+given — the same set and the same count. Do NOT add, remove, reorder, or alter any tag; tag-structure
+problems are handled separately. You may only change the TEXT and whitespace to resolve the flagged codes.
 
-Decide a verdict. Use "false_positive" when the current target is already correct and the
-QA flag is a mechanical artifact — e.g. the flagged sign is part of an HTML entity like
-&quot; or &amp;, the segment is a brand name / code / date correctly kept identical to the
-source, or the source has the very same pattern. For a false_positive, DO NOT change the
-translation; it will be marked "ignored" in memoQ. Use "fix" only for a genuine error, and
-then return the corrected target. Set auto_apply=true only when you are confident."""
+For EACH flagged code decide a verdict:
+- "false_positive": the current target is already correct and the flag is a mechanical artifact —
+  e.g. the flagged sign is inside an entity like &quot; or &amp;, the text is a brand/code/date
+  correctly identical to the source, or the source contains the very same pattern. Do not change it.
+- "fix": a genuine error; correct it per the code's official meaning.
+
+Return fixed_target = the corrected target with every marker preserved. If every code is a
+false_positive, return the current target unchanged. Give an HONEST integer confidence 0-100; use
+100 ONLY when you are certain the fix is correct and safe. Below the auto-apply threshold a human confirms."""
 
 
 def _build_user(member, issues):
-    lines = ["ISSUES on this segment:"]
+    lines = ["FLAGGED CODES on this segment:"]
     for i in issues:
-        lines.append(f"- code {i.code}: {describe_code(i.code, i.problemname)}"
+        lines.append(f"- code {i.code}: {describe_code(normalize_code(i.code), i.problemname)}"
                      + (f"  [details: {i.args}]" if i.args else ""))
+    candidate = collapse_internal_spaces(align_whitespace(member.source_text, member.target_text))
     lines.append(f"\nSOURCE: {member.source_text}")
     lines.append(f"CURRENT TARGET: {member.target_text}")
-    lines.append("\nReturn the corrected target (keep all ⟦N⟧ markers).")
+    if candidate != member.target_text:
+        lines.append(f"WHITESPACE-NORMALIZED CANDIDATE (start from this; whitespace already aligned): {candidate}")
+    lines.append("\nReturn fixed_target keeping every ⟦id:label⟧ marker exactly, a verdict per code, "
+                 "and an honest integer confidence.")
     return "\n".join(lines)
 
 
-def resolve_segment(member, issues, context, ai_client) -> Resolution:
+def resolve_segment(member, issues, context, ai_client, threshold=100) -> Resolution:
     user = _build_user(member, issues)
     try:
         data = ai_client.resolve(_SYSTEM, user, SEGMENT_SCHEMA)
     except Exception as exc:
         return Resolution(action="report", confidence=0.0, needs_approval=True,
                           strategy="ai", rationale=f"AI error: {exc}")
-    verdict = data.get("verdict", "fix")
-    conf = {"high": 0.95, "medium": 0.6, "low": 0.3}.get(data.get("confidence"), 0.3)
-    if verdict == "false_positive":
-        needs = not (data.get("auto_apply", False) and data.get("confidence") == "high")
+
+    verdicts = {normalize_code(v.get("code", "")): v.get("verdict", "fix")
+                for v in data.get("code_verdicts", [])}
+    conf_int = int(data.get("confidence", 0))
+    conf = conf_int / 100.0
+    rationale = data.get("rationale", "")
+    seg_codes = [normalize_code(i.code) for i in issues]
+    fp_codes = [c for c in seg_codes if verdicts.get(c) == "false_positive"]
+    fix_codes = [c for c in seg_codes if verdicts.get(c, "fix") != "false_positive"]
+
+    # Every code a false positive -> ignore; translation untouched.
+    if not fix_codes:
         return Resolution(action="ignore", new_target=None, confidence=conf,
-                          needs_approval=needs, strategy="ai",
-                          rationale=data.get("rationale", ""))
-    fixed_tok = data["fixed_target"]
-    # detokenize defensively: markers must match the segment's tag map
+                          needs_approval=conf_int < threshold, strategy="ai",
+                          rationale=rationale, ignore_codes=fp_codes)
+
+    fixed_tok = data.get("fixed_target", "")
+    # Cardinal guard: the AI must preserve the target's tags exactly (it may only
+    # change text/whitespace). Any tag change -> cannot auto-apply, human reviews.
+    if not count_parity(fixed_tok, member.target_text):
+        return Resolution(action="fix", new_target=None, confidence=conf, needs_approval=True,
+                          strategy="ai", ignore_codes=fp_codes,
+                          rationale="AI altered the segment's tags; review manually. " + rationale)
     try:
-        new_inner = detokenize(_xml_escape(fixed_tok), member.target_tags) \
-            if member.target_tags else detokenize(fixed_tok, member.target_tags)
-        bad_markers = False
+        new_inner = (detokenize(_xml_escape(fixed_tok), member.target_tags)
+                     if member.target_tags else detokenize(fixed_tok, member.target_tags))
     except ValueError:
-        bad_markers = True
-    if bad_markers:
-        return Resolution(action="fix", new_target=None, confidence=conf,
-                          needs_approval=True, strategy="ai",
-                          rationale="AI changed the tag markers; please review/fix manually. "
-                                    + data.get("rationale", ""))
-    needs = (not data.get("auto_apply", False))
+        return Resolution(action="fix", new_target=None, confidence=conf, needs_approval=True,
+                          strategy="ai", ignore_codes=fp_codes,
+                          rationale="AI changed the tag markers; review manually. " + rationale)
     return Resolution(action="fix", new_target=new_inner, confidence=conf,
-                      needs_approval=needs, strategy="ai", rationale=data.get("rationale", ""))
+                      needs_approval=conf_int < threshold, strategy="ai",
+                      rationale=rationale, ignore_codes=fp_codes)

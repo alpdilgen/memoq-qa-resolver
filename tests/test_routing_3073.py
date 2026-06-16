@@ -17,7 +17,11 @@ DOC = (
 
 class _Fake:
     def resolve(self, system_prompt, user_content, schema):
-        return {"fixed_target": "A/ B", "auto_apply": True, "confidence": "high", "rationale": "added space after sign"}
+        # New per-segment schema: verdict "fix" at confidence 100 -> auto-applies.
+        # Segment is tag-free, so any fixed_target passes the tag-parity guard.
+        return {"code_verdicts": [{"code": "3073", "verdict": "fix"}],
+                "fixed_target": "A/ B", "confidence": 100,
+                "rationale": "added space after sign"}
 
 
 def test_3073_segment_routed_to_ai_not_skipped():

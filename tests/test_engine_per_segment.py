@@ -5,8 +5,14 @@ FIX = Path(__file__).parent / "fixtures" / "sample.mqxliff"
 
 
 class _Fake:
+    # Sample fixture is all 3101: grouped segments use XSEG_SCHEMA (unchanged),
+    # ungrouped ones use the new per-segment SEGMENT_SCHEMA. Dispatch on schema.
+    # Both return a "needs approval" suggestion with a concrete proposed target.
     def resolve(self, system_prompt, user_content, schema):
-        return {"fixed_target": "ΔΙΟΡΘΩΜΕΝΟ", "auto_apply": False,
+        if "code_verdicts" in schema.get("properties", {}):
+            return {"code_verdicts": [{"code": "3101", "verdict": "fix"}],
+                    "fixed_target": "ΔΙΟΡΘΩΜΕΝΟ", "confidence": 80, "rationale": "fix"}
+        return {"canonical_target": "ΔΙΟΡΘΩΜΕΝΟ", "auto_apply": False,
                 "confidence": "high", "rationale": "fix"}
 
 

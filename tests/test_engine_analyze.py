@@ -5,8 +5,16 @@ FIX = Path(__file__).parent / "fixtures" / "sample.mqxliff"
 
 
 class _Fake:
+    # The sample fixture's segments are all 3101 (inconsistency). Grouped ones go
+    # through the cross-segment resolver (XSEG_SCHEMA, unchanged); ungrouped ones
+    # (distinct source) fall through to the per-segment resolver (SEGMENT_SCHEMA,
+    # new shape). Dispatch on the schema so one fake serves both. Both return a
+    # "needs approval" suggestion to keep this test's intent (pending, not auto).
     def resolve(self, system_prompt, user_content, schema):
-        return {"fixed_target": "ΔΙΟΡΘΩΜΕΝΟ", "auto_apply": False,
+        if "code_verdicts" in schema.get("properties", {}):
+            return {"code_verdicts": [{"code": "3101", "verdict": "fix"}],
+                    "fixed_target": "ΔΙΟΡΘΩΜΕΝΟ", "confidence": 80, "rationale": "test fix"}
+        return {"canonical_target": "ΔΙΟΡΘΩΜΕΝΟ", "auto_apply": False,
                 "confidence": "high", "rationale": "test fix"}
 
 

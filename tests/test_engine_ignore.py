@@ -14,15 +14,19 @@ def _doc(code, problemname, src, tgt):
 
 
 class _FP:
+    # New per-segment schema: verdict false_positive at confidence 100 -> auto-ignore.
     def resolve(self, s, u, sch):
-        return {"verdict": "false_positive", "fixed_target": "", "auto_apply": True,
-                "confidence": "high", "rationale": "entity, not a real error"}
+        return {"code_verdicts": [{"code": "3073", "verdict": "false_positive"}],
+                "fixed_target": "A;B", "confidence": 100,
+                "rationale": "entity, not a real error"}
 
 
-class _Fix:
+class _DropsTag:
+    # Verdict "fix" at confidence 100, but the fixed_target DROPS the segment's
+    # inline tag -> violates the tag-parity guard -> resolver forces needs_approval.
     def resolve(self, s, u, sch):
-        return {"verdict": "fix", "fixed_target": "X", "auto_apply": True,
-                "confidence": "high", "rationale": "fix"}
+        return {"code_verdicts": [{"code": "3073", "verdict": "fix"}],
+                "fixed_target": "Νεο", "confidence": 100, "rationale": "fix"}
 
 
 def test_high_conf_false_positive_goes_to_auto_ignore():
@@ -31,7 +35,16 @@ def test_high_conf_false_positive_goes_to_auto_ignore():
     assert rs.auto_applied[0].resolution.action == "ignore"
 
 
-def test_risky_code_never_auto_even_if_ai_says_so():
-    # 2016 is risky -> forced to pending regardless of auto_apply=True
-    rs = analyze(_doc("02016", "changed tag order", "A", "B"), ai_client=_Fix(), glossary={})
+def test_tag_dropping_fix_never_auto_even_at_full_confidence():
+    # Intent revised: the blanket "risky codes never auto" rule is GONE (tag-structure
+    # codes are now handled deterministically). The NEW safety net: a content-code fix
+    # whose proposed target changes the segment's inline-tag multiset (here, DROPS the
+    # ⟦1:..⟧ tag) violates the count-parity guard and is forced to needs_approval at
+    # ANY confidence -- the resolver never auto-applies a tag-altering edit.
+    tgt = 'Α<ph id="1">x</ph>Β'
+    rs = analyze(_doc("03073", "space missing after sign", "AxB", tgt),
+                 ai_client=_DropsTag(), glossary={})
     assert len(rs.auto_applied) == 0 and len(rs.pending) == 1
+    res = rs.pending[0].resolution
+    assert res.needs_approval is True and res.new_target is None
+    assert "tag" in res.rationale.lower()

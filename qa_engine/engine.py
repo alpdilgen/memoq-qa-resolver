@@ -8,6 +8,7 @@ from .resolvers.inconsistency_resolver import resolve_inconsistencies
 from .resolvers.inconsistency_xseg import resolve_inconsistency_groups
 from .resolvers.ai_segment_resolver import resolve_segment
 from .qa_codes import BULK_SUITABLE_CODES, RISKY_CODES, describe_code
+from .tagfix import plan_tag_structure, TAG_STRUCTURE_CODES
 from .apply import apply_resolved_items
 from .tags import detokenize
 
@@ -28,6 +29,72 @@ def _disp(text, tags):
         return text
 
 
+def _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold) -> Resolution:
+    """Single combined resolution for one segment, covering ALL its codes:
+    deterministic whitespace + deterministic tag-structure (2016 false-positive,
+    2011 count-parity) + LLM for content codes; per-code false positives recorded
+    in ignore_codes. Auto-applies only when nothing needs human judgement."""
+    codes = [normalize_code(i.code) for i in seg_issues]
+    ws_codes = [c for c in codes if c in BULK_SUITABLE_CODES]
+    tag_codes = [c for c in codes if c in TAG_STRUCTURE_CODES]
+    content_codes = [c for c in codes
+                     if c not in BULK_SUITABLE_CODES and c not in TAG_STRUCTURE_CODES]
+
+    tag_ignore, additions, remaining_tag = ([], [], [])
+    if tag_codes:
+        tag_ignore, additions, remaining_tag = plan_tag_structure(member, tag_codes)
+
+    base_inner = None
+    ignore_content = []
+    need = False
+    conf = 1.0
+    strategy = "deterministic"
+    rationale = ""
+
+    if guid in xseg:                                   # cross-segment inconsistency decision
+        r = xseg[guid]
+        base_inner, need, conf, rationale = r.new_target, r.needs_approval, r.confidence, r.rationale
+        ignore_content = list(r.ignore_codes or [])
+        strategy = "ai"
+    elif content_codes:
+        if ai_client is not None:
+            r = resolve_segment(member, seg_issues, None, ai_client, threshold)
+            base_inner, need, conf, rationale = r.new_target, r.needs_approval, r.confidence, r.rationale
+            ignore_content = list(r.ignore_codes or [])
+            strategy = "ai"
+        else:
+            need, strategy = True, "ai"
+            rationale = "AI required to resolve " + ", ".join(sorted(set(content_codes)))
+    elif ws_codes:                                     # whitespace-only (no content)
+        wr = _WS.resolve(seg_issues[0], member, None)
+        if wr.new_target is None:                      # already correct -> false positive
+            ignore_content = list(dict.fromkeys(ws_codes))
+            rationale = "whitespace already correct (false positive)"
+        else:
+            base_inner, rationale = wr.new_target, wr.rationale
+
+    # 2011: append the missing self-contained tags to reach count parity.
+    if additions:
+        if base_inner is None:
+            try:
+                base_inner = detokenize(member.target_text, member.target_tags)
+            except ValueError:
+                base_inner, need = None, True
+        if base_inner is not None:
+            base_inner = base_inner + "".join(additions)
+
+    ignore_codes = list(dict.fromkeys(list(ignore_content) + list(tag_ignore)))
+    if remaining_tag:                                  # 2010/2015/unsafe 2011 -> human
+        need = True
+    if base_inner is None and not ignore_codes:        # genuine no-op -> never auto
+        need = True
+
+    action = "ignore" if (base_inner is None and ignore_codes) else "fix"
+    return Resolution(action=action, new_target=base_inner, confidence=conf,
+                      needs_approval=need, strategy=strategy, rationale=rationale,
+                      ignore_codes=ignore_codes)
+
+
 def reconcile(session) -> None:
     """Ledger invariant: every detected issue lands in exactly one bucket.
     Asserts fix + ignore + needs_approval == total_issues. A mismatch means an
@@ -39,7 +106,7 @@ def reconcile(session) -> None:
             f"ledger mismatch: accounted {accounted} != detected {session.total_issues}")
 
 
-def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
+def analyze(content: bytes, ai_client=None, glossary=None, threshold=100) -> ReviewSession:
     src_lang, tgt_lang = parse_languages(content)
     issues, members = parse_issues(content)
     total_issues = len(issues)
@@ -75,36 +142,7 @@ def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
                 source_preview="", current_target_preview="", proposed_target_preview=None,
                 resolution=res, issue_count=n_issues))
             continue
-        codes = [normalize_code(i.code) for i in seg_issues]
-        all_bulk = all(c in BULK_SUITABLE_CODES for c in codes)
-
-        if guid in xseg:
-            # Phase A already decided this segment's target (cross-segment unification).
-            res = xseg[guid]
-        elif all_bulk:
-            res = _WS.resolve(seg_issues[0], member, None)
-        elif ai_client is not None:
-            res = resolve_segment(member, seg_issues, None, ai_client)
-        else:
-            # no AI available -> surface as a suggestion needing manual handling,
-            # never silently dropped, never auto-applied
-            res = Resolution(action="fix", new_target=None, confidence=0.0,
-                             needs_approval=True, strategy="ai",
-                             rationale="AI is required to resolve "
-                                       + ", ".join(sorted(set(codes)))
-                                       + "; enable AI or fix manually.")
-
-        # Deterministic no-op (whitespace already aligned / nothing to change):
-        # this is a false positive -> IGNORE (accounted), never silently skipped.
-        if (res.new_target is None and res.strategy == "deterministic"
-                and res.action in ("fix", "report")):
-            res = Resolution(action="ignore", new_target=None, needs_approval=False,
-                             strategy="deterministic",
-                             rationale="flagged but target already correct (false positive)")
-
-        # Risky tag-structure codes must never auto-apply; force approval.
-        if any(c in RISKY_CODES for c in codes):
-            res = replace(res, needs_approval=True)
+        res = _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold)
 
         src_disp = _disp(member.source_text, member.source_tags)
         cur_disp = _disp(member.target_text, member.target_tags)

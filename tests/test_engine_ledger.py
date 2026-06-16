@@ -5,8 +5,15 @@ FIX = Path(__file__).parent / "fixtures" / "sample.mqxliff"
 
 
 class _Fix:
+    # All sample-fixture segments are 3101. Distinct sources -> each routes to the
+    # per-segment resolver (SEGMENT_SCHEMA); none group cross-segment here. Return
+    # a tag-free fix at confidence 100 so the resolution is well-formed; the test
+    # only asserts the ledger balances (every issue accounted in exactly one bucket).
     def resolve(self, s, u, sch):
-        return {"verdict": "fix", "fixed_target": "X", "auto_apply": True,
+        if "code_verdicts" in sch.get("properties", {}):
+            return {"code_verdicts": [{"code": "3101", "verdict": "fix"}],
+                    "fixed_target": "X", "confidence": 100, "rationale": "r"}
+        return {"canonical_target": "X", "auto_apply": True,
                 "confidence": "high", "rationale": "r"}
 
 
