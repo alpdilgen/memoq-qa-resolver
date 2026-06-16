@@ -7,12 +7,13 @@ from ..qa_codes import describe_code
 SEGMENT_SCHEMA = {
     "type": "object",
     "properties": {
+        "verdict": {"type": "string", "enum": ["fix", "false_positive"]},
         "fixed_target": {"type": "string"},
         "auto_apply": {"type": "boolean"},
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
         "rationale": {"type": "string"},
     },
-    "required": ["fixed_target", "auto_apply", "confidence", "rationale"],
+    "required": ["verdict", "fixed_target", "auto_apply", "confidence", "rationale"],
     "additionalProperties": False,
 }
 
@@ -23,7 +24,14 @@ the localization args memoQ provided. Return the corrected target. Set auto_appl
 the fix is unambiguous and safe (e.g. a clear mechanical or factual correction); set auto_apply=false
 when a human should confirm (anything requiring stylistic/semantic judgment, terminology choices,
 restructuring, or where you are not fully certain). If the current target is already correct for the
-flagged issue, return it unchanged with auto_apply=true and say so in the rationale."""
+flagged issue, return it unchanged with auto_apply=true and say so in the rationale.
+
+Decide a verdict. Use "false_positive" when the current target is already correct and the
+QA flag is a mechanical artifact — e.g. the flagged sign is part of an HTML entity like
+&quot; or &amp;, the segment is a brand name / code / date correctly kept identical to the
+source, or the source has the very same pattern. For a false_positive, DO NOT change the
+translation; it will be marked "ignored" in memoQ. Use "fix" only for a genuine error, and
+then return the corrected target. Set auto_apply=true only when you are confident."""
 
 
 def _build_user(member, issues):
@@ -44,8 +52,14 @@ def resolve_segment(member, issues, context, ai_client) -> Resolution:
     except Exception as exc:
         return Resolution(action="report", confidence=0.0, needs_approval=True,
                           strategy="ai", rationale=f"AI error: {exc}")
-    fixed_tok = data["fixed_target"]
+    verdict = data.get("verdict", "fix")
     conf = {"high": 0.95, "medium": 0.6, "low": 0.3}.get(data.get("confidence"), 0.3)
+    if verdict == "false_positive":
+        needs = not (data.get("auto_apply", False) and data.get("confidence") == "high")
+        return Resolution(action="ignore", new_target=None, confidence=conf,
+                          needs_approval=needs, strategy="ai",
+                          rationale=data.get("rationale", ""))
+    fixed_tok = data["fixed_target"]
     # detokenize defensively: markers must match the segment's tag map
     try:
         new_inner = detokenize(_xml_escape(fixed_tok), member.target_tags) \

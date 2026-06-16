@@ -60,6 +60,10 @@ BULK_SUITABLE_CODES = {
 }
 
 
+# Tag-structure codes where an automatic fix can corrupt the file; never auto-apply.
+RISKY_CODES = {"1001", "1002", "2004", "2010", "2011", "2015", "2016"}
+
+
 def describe_code(code: str, problemname: str = "") -> str:
     """Official description for a code; fall back to the warning's problemname."""
     return QA_CODE_DESCRIPTIONS.get(code, problemname or f"QA code {code}")
