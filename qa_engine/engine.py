@@ -1,10 +1,12 @@
 from dataclasses import replace
-from .models import ReviewSession, ResolvedItem
+from .models import ReviewSession, ResolvedItem, Resolution
 from .parser import parse_issues, parse_languages
 from .registry import STRATEGY_BY_CODE, register_resolver, get_resolver
 from .resolvers.base import normalize_code, ReportOnlyResolver
 from .resolvers.whitespace_resolver import WhitespaceResolver
 from .resolvers.inconsistency_resolver import resolve_inconsistencies
+from .resolvers.ai_segment_resolver import resolve_segment
+from .qa_codes import BULK_SUITABLE_CODES, describe_code
 from .apply import apply_resolved_items
 
 # Register deterministic resolvers for their codes (one shared instance).
@@ -13,50 +15,62 @@ for _code, _strat in STRATEGY_BY_CODE.items():
     if _strat == "deterministic":
         register_resolver(_code, _WS)
 
-_INCONSISTENCY_CODES = {"3100", "3101"}
-
 
 def analyze(content: bytes, ai_client=None, glossary=None) -> ReviewSession:
     src_lang, tgt_lang = parse_languages(content)
     issues, members = parse_issues(content)
 
-    # Batch AI inconsistency resolution (cross-segment).
-    inconsistency_res = {}
-    if ai_client is not None and any(normalize_code(i.code) in _INCONSISTENCY_CODES for i in issues):
-        inconsistency_res = resolve_inconsistencies(
-            [i for i in issues if normalize_code(i.code) in _INCONSISTENCY_CODES],
-            members, ai_client, glossary or {})
+    # group issues by segment, preserve segment order (by numeric tu_id)
+    by_seg = {}
+    for it in issues:
+        by_seg.setdefault(it.segmentguid, []).append(it)
+    ordered_guids = sorted(by_seg, key=lambda g: int(by_seg[g][0].tu_id)
+                           if by_seg[g][0].tu_id.isdigit() else 0)
 
-    auto, pending, report = [], [], []
-    for idx, issue in enumerate(issues):
-        member = members.get(issue.segmentguid)
-        code = normalize_code(issue.code)
+    auto, pending = [], []
+    for guid in ordered_guids:
+        seg_issues = by_seg[guid]
+        member = members.get(guid)
         if member is None:
             continue
-        if code in _INCONSISTENCY_CODES:
-            res = inconsistency_res.get(issue.segmentguid)
-            if res is None:
-                res = ReportOnlyResolver().resolve(issue, member, None)
-        else:
-            res = get_resolver(issue).resolve(issue, member, None)
+        codes = [normalize_code(i.code) for i in seg_issues]
+        all_bulk = all(c in BULK_SUITABLE_CODES for c in codes)
 
+        if all_bulk:
+            res = _WS.resolve(seg_issues[0], member, None)
+        elif ai_client is not None:
+            res = resolve_segment(member, seg_issues, None, ai_client)
+        else:
+            # no AI available -> surface as a suggestion needing manual handling,
+            # never silently dropped, never auto-applied
+            res = Resolution(action="fix", new_target=None, confidence=0.0,
+                             needs_approval=True, strategy="ai",
+                             rationale="AI is required to resolve "
+                                       + ", ".join(sorted(set(codes)))
+                                       + "; enable AI or fix manually.")
+
+        primary = seg_issues[0]
         item = ResolvedItem(
-            item_id=f"{issue.segmentguid}:{code}:{idx}",
-            segmentguid=issue.segmentguid, tu_id=issue.tu_id,
-            code=code, problemname=issue.problemname,
+            item_id=f"{guid}:{primary.code}",
+            segmentguid=guid, tu_id=primary.tu_id,
+            code=primary.code, problemname=primary.problemname,
             source_preview=member.source_text,
             current_target_preview=member.target_text,
-            proposed_target_preview=res.new_target,
+            proposed_target_preview=res.new_target if res.new_target is not None
+                                     else member.target_text,
             resolution=res,
         )
-        if res.action == "report":
-            report.append(item)
-        elif res.needs_approval:
+        # deterministic no-op (whitespace already aligned) -> nothing to do; skip it
+        if res.action == "fix" and res.new_target is None and res.strategy == "deterministic":
+            continue
+        if res.action == "report" and res.new_target is None and res.strategy == "deterministic":
+            continue
+        if res.needs_approval:
             pending.append(item)
         else:
             auto.append(item)
 
-    return ReviewSession(src_lang, tgt_lang, auto, pending, report)
+    return ReviewSession(src_lang, tgt_lang, auto, pending, report_only=[])
 
 
 def apply(content: bytes, items) -> bytes:

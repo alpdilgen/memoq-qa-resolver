@@ -6,7 +6,8 @@ FIX = Path(__file__).parent / "fixtures" / "sample.mqxliff"
 
 class _Fake:
     def resolve(self, system_prompt, user_content, schema):
-        return {"category": "false_positive", "rationale": "ws", "confidence": "high"}
+        return {"fixed_target": "ΔΙΟΡΘΩΜΕΝΟ", "auto_apply": False,
+                "confidence": "high", "rationale": "test fix"}
 
 
 def test_session_to_view_shape():
