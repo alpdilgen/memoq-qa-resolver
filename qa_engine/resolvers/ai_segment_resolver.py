@@ -69,14 +69,11 @@ def _build_user(member, issues):
     return "\n".join(lines)
 
 
-def resolve_segment(member, issues, context, ai_client, threshold=100) -> Resolution:
-    user = _build_user(member, issues)
-    try:
-        data = ai_client.resolve(_SYSTEM, user, SEGMENT_SCHEMA)
-    except Exception as exc:
-        return Resolution(action="report", confidence=0.0, needs_approval=True,
-                          strategy="ai", rationale=f"AI error: {exc}")
-
+def resolution_from_ai_data(member, issues, data, threshold=100) -> Resolution:
+    """Turn one segment's AI payload (code_verdicts / fixed_target / confidence /
+    rationale) into a Resolution, applying the per-segment guards. Shared by the
+    single-segment resolver and the batched resolver so both enforce the same
+    tag-parity and marker checks."""
     verdicts = {normalize_code(v.get("code", "")): v.get("verdict", "fix")
                 for v in data.get("code_verdicts", [])}
     conf_int = max(0, min(100, int(data.get("confidence", 0))))   # clamp to 0-100
@@ -110,3 +107,13 @@ def resolve_segment(member, issues, context, ai_client, threshold=100) -> Resolu
                       needs_approval=conf_int < threshold, strategy="ai",
                       rationale=rationale, ignore_codes=fp_codes,
                       new_target_tokens=fixed_tok)
+
+
+def resolve_segment(member, issues, context, ai_client, threshold=100) -> Resolution:
+    user = _build_user(member, issues)
+    try:
+        data = ai_client.resolve(_SYSTEM, user, SEGMENT_SCHEMA)
+    except Exception as exc:
+        return Resolution(action="report", confidence=0.0, needs_approval=True,
+                          strategy="ai", rationale=f"AI error: {exc}")
+    return resolution_from_ai_data(member, issues, data, threshold)
