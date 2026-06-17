@@ -1,8 +1,12 @@
+import os
 import streamlit as st
 
 from qa_engine.engine import analyze_stream, apply, session_to_view, items_for_apply
 from qa_engine.aiclient import ClaudeAIClient
 from qa_engine.tags import to_chips
+from qa_engine.checkpoint import Checkpoint, content_key
+
+CACHE_DIR = ".qa_cache"
 
 st.set_page_config(page_title="memoQ QA Resolver", layout="wide")
 st.title("memoQ QA Resolver")
@@ -22,22 +26,43 @@ threshold = st.sidebar.slider("Auto-apply confidence threshold", min_value=50, m
                               value=100, step=5,
                               help="A fix is applied automatically only when the AI's confidence "
                                    "is at least this. Below it, the fix waits for your approval.")
+batch_size = st.sidebar.slider("Segments per AI call (batch size)", min_value=1, max_value=25,
+                               value=12,
+                               help="Higher = far fewer API calls on big files (much faster, "
+                                    "resilient to timeouts). Lower if a call ever gets too large.")
 st.sidebar.caption("Without a key, only deterministic fixes (whitespace, safe tag rules) run; "
-                   "everything needing judgement waits for approval.")
+                   "everything needing judgement waits for approval. Progress is checkpointed — "
+                   "if the page reloads mid-run, re-run the same file to resume from where it stopped.")
 
 uploaded = st.file_uploader("memoQ .mqxliff", type=["mqxliff"])
 
+# Clicking Analyze records a persistent job (survives reruns) so a dropped
+# connection resumes from the on-disk checkpoint instead of restarting.
 if uploaded is not None and st.button("Analyze QA issues", type="primary"):
     content = uploaded.read()
-    ai_client = None
-    if use_ai and api_key:
-        import anthropic
-        ai_client = ClaudeAIClient(anthropic.Anthropic(api_key=api_key))
+    st.session_state["job"] = {
+        "content": content, "key": content_key(content), "threshold": threshold,
+        "batch_size": batch_size, "use_ai": use_ai, "api_key": api_key, "running": True,
+    }
+    st.session_state.pop("rs", None)
 
-    # --- Live progress: process each flagged segment, updating a bar + status line ---
+job = st.session_state.get("job")
+if job and job.get("running"):
+    ai_client = None
+    if job["use_ai"] and job["api_key"]:
+        import anthropic
+        ai_client = ClaudeAIClient(anthropic.Anthropic(api_key=job["api_key"]))
+
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    ckpt = Checkpoint(os.path.join(CACHE_DIR, job["key"] + ".json"))
+    resumed = len(ckpt.all_items())
+    if resumed:
+        st.info(f"Resuming — {resumed} segments already done are loaded from the checkpoint.")
+
     bar = st.progress(0.0)
     status = st.empty()
-    gen = analyze_stream(content, ai_client=ai_client, glossary={}, threshold=threshold)
+    gen = analyze_stream(job["content"], ai_client=ai_client, glossary={},
+                         threshold=job["threshold"], batch_size=job["batch_size"], checkpoint=ckpt)
     rs = None
     try:
         while True:
@@ -53,7 +78,8 @@ if uploaded is not None and st.button("Analyze QA issues", type="primary"):
     status.markdown(f"Done — checked {rs.total_issues} issues across "
                     f"{len(rs.auto_applied) + len(rs.pending)} segments.")
     st.session_state["rs"] = rs
-    st.session_state["content"] = content
+    st.session_state["content"] = job["content"]
+    job["running"] = False
 
 
 def render(rs):

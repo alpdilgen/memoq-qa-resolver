@@ -10,3 +10,6 @@ out/
 /*.mqxliff
 /*.html
 !tests/fixtures/*.mqxliff
+
+# analysis checkpoints
+.qa_cache/
