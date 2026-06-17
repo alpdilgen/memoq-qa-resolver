@@ -7,6 +7,7 @@ from .resolvers.whitespace_resolver import WhitespaceResolver
 from .resolvers.inconsistency_resolver import resolve_inconsistencies
 from .resolvers.inconsistency_xseg import resolve_inconsistency_groups
 from .resolvers.ai_segment_resolver import resolve_segment
+from .resolvers.batch_resolver import resolve_segment_batch
 from .qa_codes import BULK_SUITABLE_CODES, RISKY_CODES, describe_code
 from .tagfix import plan_tag_structure, TAG_STRUCTURE_CODES
 from .apply import apply_resolved_items
@@ -29,7 +30,18 @@ def _disp(text, tags):
         return text
 
 
-def _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold) -> Resolution:
+def _needs_ai_segment(guid, seg_codes, xseg) -> bool:
+    """True if this segment requires an AI call (content codes, or whitespace on a
+    reordered segment) and isn't already decided by Phase A."""
+    if guid in xseg:
+        return False
+    ws = [c for c in seg_codes if c in BULK_SUITABLE_CODES]
+    content = [c for c in seg_codes
+               if c not in BULK_SUITABLE_CODES and c not in TAG_STRUCTURE_CODES]
+    return bool(content or (ws and "2016" in seg_codes))
+
+
+def _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold, ai_result=None) -> Resolution:
     """Single combined resolution for one segment, covering ALL its codes:
     deterministic whitespace + deterministic tag-structure (2016 false-positive,
     2011 count-parity) + LLM for content codes; per-code false positives recorded
@@ -61,9 +73,12 @@ def _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold) -> Resol
         ignore_content = list(r.ignore_codes or [])
         strategy = "ai"
     elif content_codes or (ws_codes and reordered):
-        # AI handles content codes and/or whitespace on a reordered segment.
-        if ai_client is not None:
+        # AI handles content codes and/or whitespace on a reordered segment. Use a
+        # precomputed batch result when provided, else a single per-segment call.
+        r = ai_result
+        if r is None and ai_client is not None:
             r = resolve_segment(member, seg_issues, None, ai_client, threshold)
+        if r is not None:
             base_inner, need, conf, rationale = r.new_target, r.needs_approval, r.confidence, r.rationale
             ignore_content = list(r.ignore_codes or [])
             strategy = "ai"
@@ -113,10 +128,31 @@ def _verdict_label(res) -> str:
     return res.action          # "fix" | "ignore"
 
 
-def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100):
-    """Generator: process each flagged segment in order, yielding a Progress after
-    each one (for a live UI). Returns the finished ReviewSession (PEP 380 — caught
-    via StopIteration.value, or simply use analyze())."""
+def _make_item(guid, member, seg_issues, res) -> ResolvedItem:
+    primary = seg_issues[0]
+    src_disp = _disp(member.source_text, member.source_tags)
+    cur_disp = _disp(member.target_text, member.target_tags)
+    prop_disp = res.new_target if res.new_target is not None else cur_disp
+    # Token-form proposal seeds the edit box and round-trips by id on apply.
+    prop_tokens = res.new_target_tokens if res.new_target_tokens is not None else member.target_text
+    return ResolvedItem(
+        item_id=f"{guid}:{primary.code}", segmentguid=guid, tu_id=primary.tu_id,
+        code=primary.code, problemname=primary.problemname,
+        source_preview=src_disp, current_target_preview=cur_disp,
+        proposed_target_preview=prop_disp, resolution=res, issue_count=len(seg_issues),
+        tags=dict(member.target_tags), proposed_tokens=prop_tokens,
+    )
+
+
+def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100,
+                   batch_size=1, checkpoint=None):
+    """Generator: resolve each flagged segment, yielding a Progress as each finalizes.
+    Returns the finished ReviewSession (PEP 380 — via StopIteration.value, or use analyze()).
+
+    batch_size>1 sends content/AI segments to the LLM in groups of that size (far fewer
+    calls on big files). A `checkpoint` (qa_engine.checkpoint.Checkpoint) caches each
+    segment's result and is flushed after every batch, so an interrupted run resumes
+    instead of restarting — and partial work is never lost."""
     src_lang, tgt_lang = parse_languages(content)
     issues, members = parse_issues(content)
     total_issues = len(issues)
@@ -134,48 +170,66 @@ def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100)
         xseg = resolve_inconsistency_groups(issues, members, ai_client)
 
     auto, pending = [], []
-    for idx, guid in enumerate(ordered_guids, 1):
+    done = [0]
+
+    def _emit(guid, item):
+        (pending if item.resolution.needs_approval else auto).append(item)
+        if checkpoint is not None:
+            checkpoint.save_item(item)
+        done[0] += 1
+        codes = [normalize_code(i.code) for i in by_seg[guid]]
+        return Progress(done[0], total_segs, item.tu_id, codes,
+                        item.problemname, _verdict_label(item.resolution))
+
+    ai_queue = []   # [(guid, member, seg_issues)] awaiting a batched AI call
+
+    def _flush_ai_batch():
+        results = (resolve_segment_batch(ai_queue, ai_client, threshold)
+                   if (ai_client is not None and batch_size > 1) else {})
+        events = []
+        for guid, member, seg_issues in ai_queue:
+            res = _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold,
+                                ai_result=results.get(guid))
+            events.append(_emit(guid, _make_item(guid, member, seg_issues, res)))
+        ai_queue.clear()
+        if checkpoint is not None:
+            checkpoint.flush()
+        return events
+
+    for guid in ordered_guids:
         seg_issues = by_seg[guid]
-        n_issues = len(seg_issues)
         primary = seg_issues[0]
-        seg_codes = [normalize_code(i.code) for i in seg_issues]
         member = members.get(guid)
+
+        if checkpoint is not None and checkpoint.has(guid):     # resume: already done
+            yield _emit(guid, checkpoint.get_item(guid))
+            continue
+
         if member is None:
-            # pathological: a flagged segment we couldn't parse. Never drop it;
-            # surface as needs_approval so it stays in the ledger.
             res = Resolution(action="fix", new_target=None, needs_approval=True,
                              strategy="ai", rationale="segment not found; handle manually.")
-            pending.append(ResolvedItem(
-                item_id=f"{guid}:{primary.code}", segmentguid=guid, tu_id=primary.tu_id,
-                code=primary.code, problemname=primary.problemname,
-                source_preview="", current_target_preview="", proposed_target_preview=None,
-                resolution=res, issue_count=n_issues))
-            yield Progress(idx, total_segs, primary.tu_id, seg_codes,
-                           primary.problemname, "needs_approval")
+            item = ResolvedItem(item_id=f"{guid}:{primary.code}", segmentguid=guid,
+                                tu_id=primary.tu_id, code=primary.code,
+                                problemname=primary.problemname, source_preview="",
+                                current_target_preview="", proposed_target_preview=None,
+                                resolution=res, issue_count=len(seg_issues))
+            yield _emit(guid, item)
             continue
-        res = _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold)
 
-        src_disp = _disp(member.source_text, member.source_tags)
-        cur_disp = _disp(member.target_text, member.target_tags)
-        prop_disp = res.new_target if res.new_target is not None else cur_disp
-        # Token-form proposal seeds the edit box and round-trips by id on apply;
-        # fall back to the current target's tokens when there's no rewrite.
-        prop_tokens = res.new_target_tokens if res.new_target_tokens is not None else member.target_text
-        item = ResolvedItem(
-            item_id=f"{guid}:{primary.code}",
-            segmentguid=guid, tu_id=primary.tu_id,
-            code=primary.code, problemname=primary.problemname,
-            source_preview=src_disp,
-            current_target_preview=cur_disp,
-            proposed_target_preview=prop_disp,
-            resolution=res,
-            issue_count=n_issues,
-            tags=dict(member.target_tags),
-            proposed_tokens=prop_tokens,
-        )
-        (pending if res.needs_approval else auto).append(item)
-        yield Progress(idx, total_segs, primary.tu_id, seg_codes,
-                       primary.problemname, _verdict_label(res))
+        seg_codes = [normalize_code(i.code) for i in seg_issues]
+        if batch_size > 1 and ai_client is not None and _needs_ai_segment(guid, seg_codes, xseg):
+            ai_queue.append((guid, member, seg_issues))
+            if len(ai_queue) >= batch_size:
+                for ev in _flush_ai_batch():
+                    yield ev
+            continue
+
+        # deterministic / cached / single-call path -> resolve immediately
+        res = _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold)
+        yield _emit(guid, _make_item(guid, member, seg_issues, res))
+
+    for ev in _flush_ai_batch():        # last partial batch
+        yield ev
 
     session = ReviewSession(src_lang, tgt_lang, auto, pending,
                             report_only=[], total_issues=total_issues)
@@ -183,9 +237,11 @@ def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100)
     return session
 
 
-def analyze(content: bytes, ai_client=None, glossary=None, threshold=100) -> ReviewSession:
+def analyze(content: bytes, ai_client=None, glossary=None, threshold=100,
+            batch_size=1, checkpoint=None) -> ReviewSession:
     """Run the full analysis (no progress callbacks). Built on analyze_stream."""
-    gen = analyze_stream(content, ai_client, glossary, threshold)
+    gen = analyze_stream(content, ai_client, glossary, threshold,
+                         batch_size=batch_size, checkpoint=checkpoint)
     try:
         while True:
             next(gen)
