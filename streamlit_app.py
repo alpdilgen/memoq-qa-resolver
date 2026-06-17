@@ -1,10 +1,15 @@
 import os
 import streamlit as st
 
+from collections import Counter
+
 from qa_engine.engine import analyze_stream, apply, session_to_view, items_for_apply
 from qa_engine.aiclient import ClaudeAIClient
 from qa_engine.tags import to_chips
 from qa_engine.checkpoint import Checkpoint, content_key
+from qa_engine.parser import parse_issues
+from qa_engine.qa_codes import describe_code
+from qa_engine.resolvers.base import normalize_code
 
 CACHE_DIR = ".qa_cache"
 
@@ -36,13 +41,38 @@ st.sidebar.caption("Without a key, only deterministic fixes (whitespace, safe ta
 
 uploaded = st.file_uploader("memoQ .mqxliff", type=["mqxliff"])
 
+# On upload, show the code distribution and let the user bulk-ignore whole codes.
+ignore_all_sel = []
+if uploaded is not None:
+    peek = uploaded.getvalue()                       # getvalue() doesn't consume the buffer
+    try:
+        _issues, _ = parse_issues(peek)
+    except Exception:
+        _issues = []
+    counts = Counter(normalize_code(i.code) for i in _issues)
+    probname = {}
+    for i in _issues:
+        probname.setdefault(normalize_code(i.code), i.problemname)
+    if counts:
+        st.caption(f"{len(_issues)} issues across {len({i.segmentguid for i in _issues})} segments.")
+        labels = {f"{c} — {describe_code(c, probname.get(c, ''))} ({n})": c
+                  for c, n in sorted(counts.items(), key=lambda kv: -kv[1])}
+        chosen = st.multiselect(
+            "Treat entire codes as false-positive (ignore all — translation untouched, flag silenced, no AI spent)",
+            list(labels.keys()),
+            help="Use for codes you know are all false positives (e.g. 03050 when the double "
+                 "spaces are intentional). Every segment carrying these codes is marked ignored in bulk.")
+        ignore_all_sel = sorted({labels[c] for c in chosen})
+
 # Clicking Analyze records a persistent job (survives reruns) so a dropped
 # connection resumes from the on-disk checkpoint instead of restarting.
 if uploaded is not None and st.button("Analyze QA issues", type="primary"):
-    content = uploaded.read()
+    content = uploaded.getvalue()
+    key = content_key(content) + ("_" + "_".join(ignore_all_sel) if ignore_all_sel else "")
     st.session_state["job"] = {
-        "content": content, "key": content_key(content), "threshold": threshold,
-        "batch_size": batch_size, "use_ai": use_ai, "api_key": api_key, "running": True,
+        "content": content, "key": key, "threshold": threshold,
+        "batch_size": batch_size, "use_ai": use_ai, "api_key": api_key,
+        "ignore_all_codes": ignore_all_sel, "running": True,
     }
     st.session_state.pop("rs", None)
 
@@ -62,7 +92,8 @@ if job and job.get("running"):
     bar = st.progress(0.0)
     status = st.empty()
     gen = analyze_stream(job["content"], ai_client=ai_client, glossary={},
-                         threshold=job["threshold"], batch_size=job["batch_size"], checkpoint=ckpt)
+                         threshold=job["threshold"], batch_size=job["batch_size"],
+                         checkpoint=ckpt, ignore_all_codes=job.get("ignore_all_codes"))
     rs = None
     try:
         while True:

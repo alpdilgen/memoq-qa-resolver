@@ -30,23 +30,29 @@ def _disp(text, tags):
         return text
 
 
-def _needs_ai_segment(guid, seg_codes, xseg) -> bool:
+def _needs_ai_segment(guid, seg_codes, xseg, ignore_all=()) -> bool:
     """True if this segment requires an AI call (content codes, or whitespace on a
-    reordered segment) and isn't already decided by Phase A."""
+    reordered segment) and isn't already decided by Phase A. Codes the user bulk-
+    ignored don't count."""
     if guid in xseg:
         return False
-    ws = [c for c in seg_codes if c in BULK_SUITABLE_CODES]
-    content = [c for c in seg_codes
+    active = [c for c in seg_codes if c not in ignore_all]
+    ws = [c for c in active if c in BULK_SUITABLE_CODES]
+    content = [c for c in active
                if c not in BULK_SUITABLE_CODES and c not in TAG_STRUCTURE_CODES]
-    return bool(content or (ws and "2016" in seg_codes))
+    return bool(content or (ws and "2016" in active))
 
 
-def _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold, ai_result=None) -> Resolution:
+def _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold,
+                  ai_result=None, ignore_all=()) -> Resolution:
     """Single combined resolution for one segment, covering ALL its codes:
     deterministic whitespace + deterministic tag-structure (2016 false-positive,
     2011 count-parity) + LLM for content codes; per-code false positives recorded
-    in ignore_codes. Auto-applies only when nothing needs human judgement."""
-    codes = [normalize_code(i.code) for i in seg_issues]
+    in ignore_codes. Codes in `ignore_all` are bulk-marked false-positive (translation
+    untouched) and skip all processing. Auto-applies only when nothing needs human judgement."""
+    all_codes = [normalize_code(i.code) for i in seg_issues]
+    forced_ignore = [c for c in all_codes if c in ignore_all]
+    codes = [c for c in all_codes if c not in ignore_all]   # codes still to process
     ws_codes = [c for c in codes if c in BULK_SUITABLE_CODES]
     tag_codes = [c for c in codes if c in TAG_STRUCTURE_CODES]
     content_codes = [c for c in codes
@@ -99,7 +105,7 @@ def _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold, ai_resul
     if tag_target is not None:
         base_inner = tag_target
 
-    ignore_codes = list(dict.fromkeys(list(ignore_content) + list(tag_ignore)))
+    ignore_codes = list(dict.fromkeys(list(ignore_content) + list(tag_ignore) + list(forced_ignore)))
     if remaining_tag:                                  # 2010/2015/unsafe 2011 -> human
         need = True
     if base_inner is None and not ignore_codes:        # genuine no-op -> never auto
@@ -145,7 +151,7 @@ def _make_item(guid, member, seg_issues, res) -> ResolvedItem:
 
 
 def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100,
-                   batch_size=1, checkpoint=None):
+                   batch_size=1, checkpoint=None, ignore_all_codes=None):
     """Generator: resolve each flagged segment, yielding a Progress as each finalizes.
     Returns the finished ReviewSession (PEP 380 — via StopIteration.value, or use analyze()).
 
@@ -156,6 +162,7 @@ def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100,
     src_lang, tgt_lang = parse_languages(content)
     issues, members = parse_issues(content)
     total_issues = len(issues)
+    ignore_all = {normalize_code(c) for c in (ignore_all_codes or ())}
 
     by_seg = {}
     for it in issues:
@@ -189,7 +196,7 @@ def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100,
         events = []
         for guid, member, seg_issues in ai_queue:
             res = _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold,
-                                ai_result=results.get(guid))
+                                ai_result=results.get(guid), ignore_all=ignore_all)
             events.append(_emit(guid, _make_item(guid, member, seg_issues, res)))
         ai_queue.clear()
         if checkpoint is not None:
@@ -217,7 +224,8 @@ def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100,
             continue
 
         seg_codes = [normalize_code(i.code) for i in seg_issues]
-        if batch_size > 1 and ai_client is not None and _needs_ai_segment(guid, seg_codes, xseg):
+        if (batch_size > 1 and ai_client is not None
+                and _needs_ai_segment(guid, seg_codes, xseg, ignore_all)):
             ai_queue.append((guid, member, seg_issues))
             if len(ai_queue) >= batch_size:
                 for ev in _flush_ai_batch():
@@ -225,7 +233,8 @@ def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100,
             continue
 
         # deterministic / cached / single-call path -> resolve immediately
-        res = _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold)
+        res = _plan_segment(guid, member, seg_issues, ai_client, xseg, threshold,
+                            ignore_all=ignore_all)
         yield _emit(guid, _make_item(guid, member, seg_issues, res))
 
     for ev in _flush_ai_batch():        # last partial batch
@@ -238,10 +247,11 @@ def analyze_stream(content: bytes, ai_client=None, glossary=None, threshold=100,
 
 
 def analyze(content: bytes, ai_client=None, glossary=None, threshold=100,
-            batch_size=1, checkpoint=None) -> ReviewSession:
+            batch_size=1, checkpoint=None, ignore_all_codes=None) -> ReviewSession:
     """Run the full analysis (no progress callbacks). Built on analyze_stream."""
     gen = analyze_stream(content, ai_client, glossary, threshold,
-                         batch_size=batch_size, checkpoint=checkpoint)
+                         batch_size=batch_size, checkpoint=checkpoint,
+                         ignore_all_codes=ignore_all_codes)
     try:
         while True:
             next(gen)
